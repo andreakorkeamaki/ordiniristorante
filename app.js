@@ -42,6 +42,7 @@ const MENU = [
         name: "Triangoli di cheddar e nacho",
         price: 5,
         description: "5 pezzi",
+        soldOut: true,
       },
       {
         id: "crocchette-jalapenos",
@@ -50,7 +51,12 @@ const MENU = [
         description: "5 pezzi",
       },
       { id: "patatine", name: "Patatine fritte", price: 5 },
-      { id: "patatine-dolci", name: "Patatine dolci fritte", price: 5 },
+      {
+        id: "patatine-dolci",
+        name: "Patatine dolci fritte",
+        price: 5,
+        soldOut: true,
+      },
     ],
   },
   {
@@ -80,7 +86,7 @@ const MENU = [
       {
         id: "cotto-patate",
         name: "Cotto e Patate",
-        price: 8,
+        price: 9,
         description: "Mozzarella, prosciutto cotto, patate",
       },
       {
@@ -130,7 +136,7 @@ const MENU = [
         id: "marinara",
         name: "Marinara",
         price: 6,
-        description: "Pomodoro, aglio, origano, alici, acciughe, olio evo",
+        description: "Pomodoro, aglio, origano, olio evo",
       },
       {
         id: "margherita",
@@ -148,7 +154,7 @@ const MENU = [
         id: "napoli",
         name: "Napoli",
         price: 8,
-        description: "Pomodoro, mozzarella, acciughe, capperi, olive, basilico, origano",
+        description: "Pomodoro, mozzarella, capperi, olive, basilico, origano",
       },
       {
         id: "quattro-stagioni",
@@ -164,9 +170,9 @@ const MENU = [
       },
       {
         id: "gorgonzola-diavola",
-        name: "Gorgonzola e Diavola",
+        name: "Gorgonzola e Diavola Rossa",
         price: 9,
-        description: "Pomodoro, gorgonzola, salame piccante",
+        description: "Pomodoro, gorgonzola, salame piccante, mozzarella",
       },
       {
         id: "wurstel-patatine",
@@ -217,13 +223,13 @@ const MENU = [
         name: "Amatriciana",
         price: 13,
         description:
-          "Pomodoro, mozzarella, pecorino romano, guanciale croccante di Amatrice, basilico fresco",
+          "Pomodoro, pecorino romano, guanciale croccante di Amatrice, basilico fresco",
       },
       {
         id: "zucchine-guanciale-stracciatella",
         name: "Zucchine, Guanciale e Stracciatella",
         price: 13,
-        description: "Mozzarella, zucchine, guanciale, stracciatella",
+        description: "Zucchine, guanciale, stracciatella",
       },
       {
         id: "gamberetti-salsa-rosa",
@@ -232,6 +238,59 @@ const MENU = [
         description:
           "Pomodoro, salsa rosa, gamberetti, insalata iceberg, stracciatella di burrata",
       },
+      {
+        id: "insalata-pomodorini-tonno-bufala-mayo",
+        name: "Insalata, Pomodorini, Tonno, Bufala, Mayo",
+        price: 11,
+        description: "Tonno, bufala DOP, pomodorini, insalata iceberg, maionese",
+      },
+      {
+        id: "rucola-pomodorini-bufala-salmone",
+        name: "Rucola, Pomodorini, Bufala, Salmone",
+        price: 13,
+        description: "Salmone affumicato, bufala DOP, pomodorini, rucola",
+      },
+      {
+        id: "cubetti-melanzana-fritta-pomodorini-bufala",
+        name: "Cubetti di Melanzana Fritta, Pomodorini e Bufala",
+        price: 12,
+        description: "Bufala DOP, melanzane fritte a cubetti, pomodorini",
+      },
+    ],
+  },
+  {
+    id: "sapori-mare",
+    name: "I Sapori di Mare",
+    shortName: "Mare",
+    products: [
+      { id: "antipasto-mare-casa", name: "Antipasto di mare della casa", price: 15 },
+      { id: "tris-mare", name: "Tris di mare", price: 15 },
+      {
+        id: "frittura-calamari-gamberi-piccola",
+        name: "Frittura calamari e gamberi piccola",
+        price: 9.9,
+      },
+      {
+        id: "frittura-calamari-gamberi-grande",
+        name: "Frittura calamari e gamberi grande",
+        price: 16.9,
+      },
+      {
+        id: "grigliata-mare",
+        name: "Grigliata di mare",
+        price: 23,
+        description: "Non sempre disponibile",
+      },
+    ],
+  },
+  {
+    id: "bimbi",
+    name: "Per i più piccoli e non solo",
+    shortName: "Bimbi",
+    products: [
+      { id: "cotoletta-patatine", name: "Cotoletta e patatine", price: 12 },
+      { id: "hamburger-patatine", name: "Hamburger e patatine", price: 12 },
+      { id: "pasta-ragu-bimbi", name: "Pasta al ragù bimbi", price: 7 },
     ],
   },
   {
@@ -241,7 +300,7 @@ const MENU = [
     products: [
       { id: "tiramisu", name: "Tiramisù fatto in casa", price: 5 },
       { id: "panna-cotta", name: "Panna cotta fatta in casa", price: 5 },
-      { id: "tartufo-bianco", name: "Tartufo bianco", price: 5 },
+      { id: "tartufo-bianco", name: "Tartufo bianco", price: 5, soldOut: true },
       { id: "tartufo-nero", name: "Tartufo nero", price: 5 },
       { id: "dolce-giorno", name: "Dolce del giorno", price: 5 },
       {
@@ -644,9 +703,10 @@ function renderMenuCategory(category, order) {
                 data-action="add-product"
                 data-product-id="${product.id}"
                 data-category-id="${category.id}"
+                ${product.soldOut ? "disabled" : ""}
               >
                 <span class="product-name">${escapeHtml(product.name)}</span>
-                <span class="product-price">${formatPrice(product.price)}</span>
+                <span class="product-price">${product.soldOut ? "Esaurito" : formatPrice(product.price)}</span>
                 ${product.description ? `<span class="product-description">${escapeHtml(product.description)}</span>` : ""}
               </button>
             `,
