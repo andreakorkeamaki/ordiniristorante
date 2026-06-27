@@ -1,0 +1,11 @@
+{
+  "name": "La Sagretta · Comande",
+  "short_name": "Comande",
+  "description": "Comande locali per i tavoli de La Sagretta.",
+  "lang": "it",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f6efe1",
+  "theme_color": "#9f201c",
+  "orientation": "portrait-primary"
+}
