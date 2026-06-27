@@ -362,13 +362,12 @@ const MENU = [
       },
       {
         id: "mattoncino",
-        name: "Mattoncino",
+        name: "Mattoncino · Yogurt, panna e pinoli",
         price: 5,
-        description: "Yogurt, panna e pinoli",
       },
       { id: "tartufo-bianco", name: "Tartufo bianco", price: 5, soldOut: true },
       { id: "tartufo-nero", name: "Tartufo nero", price: 5 },
-      { id: "tartufo-pistacchio", name: "Tartufo al pistacchio", price: 5 },
+      { id: "tartufo-pistacchio", name: "Tartufo pistacchio", price: 5 },
       { id: "macedonia", name: "Macedonia", price: 5 },
       { id: "dolce-giorno", name: "Dolce del giorno", price: 5 },
       {
