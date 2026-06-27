@@ -320,9 +320,28 @@ const MENU = [
     shortName: "Dolci",
     products: [
       { id: "tiramisu", name: "Tiramisù fatto in casa", price: 5 },
-      { id: "panna-cotta", name: "Panna cotta fatta in casa", price: 5 },
+      {
+        id: "panna-cotta",
+        name: "Panna cotta fatta in casa",
+        price: 5,
+        description: "Gusti: frutti di bosco, Nutella, Nutella e rum, caramello",
+      },
+      {
+        id: "cheesecake",
+        name: "Cheesecake",
+        price: 5,
+        description: "Gusti: frutti di bosco, Nutella, Nutella e rum, caramello",
+      },
+      {
+        id: "mattoncino",
+        name: "Mattoncino",
+        price: 5,
+        description: "Yogurt, panna e pinoli",
+      },
       { id: "tartufo-bianco", name: "Tartufo bianco", price: 5, soldOut: true },
       { id: "tartufo-nero", name: "Tartufo nero", price: 5 },
+      { id: "tartufo-pistacchio", name: "Tartufo al pistacchio", price: 5 },
+      { id: "macedonia", name: "Macedonia", price: 5 },
       { id: "dolce-giorno", name: "Dolce del giorno", price: 5 },
       {
         id: "pinsa-nutella",
