@@ -817,6 +817,11 @@ button {
   font-size: 13px;
 }
 
+.menu-section .ready-general-note {
+  margin: 0 0 12px;
+  line-height: 1.45;
+}
+
 .ready-card .totals {
   margin-top: 13px;
 }
