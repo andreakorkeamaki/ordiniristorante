@@ -321,16 +321,44 @@ const MENU = [
     products: [
       { id: "tiramisu", name: "Tiramisù fatto in casa", price: 5 },
       {
-        id: "panna-cotta",
-        name: "Panna cotta fatta in casa",
+        id: "panna-cotta-frutti-bosco",
+        name: "Panna cotta · Frutti di bosco",
         price: 5,
-        description: "Gusti: frutti di bosco, Nutella, Nutella e rum, caramello",
       },
       {
-        id: "cheesecake",
-        name: "Cheesecake",
+        id: "panna-cotta-nutella",
+        name: "Panna cotta · Nutella",
         price: 5,
-        description: "Gusti: frutti di bosco, Nutella, Nutella e rum, caramello",
+      },
+      {
+        id: "panna-cotta-nutella-rum",
+        name: "Panna cotta · Nutella e rum",
+        price: 5,
+      },
+      {
+        id: "panna-cotta-caramello",
+        name: "Panna cotta · Caramello",
+        price: 5,
+      },
+      {
+        id: "cheesecake-frutti-bosco",
+        name: "Cheesecake · Frutti di bosco",
+        price: 5,
+      },
+      {
+        id: "cheesecake-nutella",
+        name: "Cheesecake · Nutella",
+        price: 5,
+      },
+      {
+        id: "cheesecake-nutella-rum",
+        name: "Cheesecake · Nutella e rum",
+        price: 5,
+      },
+      {
+        id: "cheesecake-caramello",
+        name: "Cheesecake · Caramello",
+        price: 5,
       },
       {
         id: "mattoncino",
