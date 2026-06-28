@@ -5,7 +5,7 @@ Web app mobile-first per menu QR, comande staff, cassa e amministrazione. Next.j
 ## Funzioni
 
 - `/menu`: menu pubblico di sola lettura, ricerca, allergeni e predisposizione IT/EN.
-- `/staff`: accesso email/password.
+- `/staff`: accesso email/password e recupero credenziali.
 - `/staff/tables`: 31 tavoli e stato aggiornato in tempo reale.
 - `/staff/table/[id]`: comanda granulare, coperti, note, extra, Presence e invio alla cassa.
 - `/cassa`: coda realtime, conferma, preview ticket 80 mm, stampa browser e chiusura tavolo.
@@ -118,6 +118,8 @@ where id = 'UUID_UTENTE';
 ```
 
 Per cassa o camerieri usare rispettivamente `cashier` o `waiter`. Il trigger crea sempre un profilo inattivo e con ruolo `waiter`: il ruolo non viene mai letto dai metadati modificabili dall’utente.
+
+Il recupero password parte da `/staff/forgot-password` e termina su `/staff/reset-password`. Il `site_url` Auth deve puntare al dominio Production; localhost e Preview Vercel restano soltanto negli URL di redirect aggiuntivi.
 
 ## Realtime e sicurezza
 

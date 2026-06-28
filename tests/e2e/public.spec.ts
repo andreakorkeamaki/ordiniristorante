@@ -19,3 +19,15 @@ test("l'area staff mostra il login o la configurazione richiesta", async ({ page
   await page.goto("/staff");
   await expect(page.locator("body")).toContainText(/Accedi|Collega Supabase/);
 });
+
+test("il recupero password usa una pagina pubblica dedicata", async ({ page }) => {
+  await page.goto("/staff/forgot-password");
+  await expect(page.getByRole("heading", { name: "Reimposta la password" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Invia link di recupero" })).toBeVisible();
+});
+
+test("un recovery link viene instradato alla nuova password", async ({ page }) => {
+  await page.goto("/menu#type=recovery");
+  await expect(page).toHaveURL(/\/staff\/reset-password/);
+  await expect(page.getByText("Link non valido o scaduto. Richiedi una nuova email.")).toBeVisible();
+});

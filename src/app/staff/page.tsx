@@ -49,7 +49,10 @@ export default async function StaffLoginPage({
           <button className="button button-primary button-large" type="submit">
             Entra
           </button>
-          <LinkToMenu />
+          <div className="login-links">
+            <a className="text-link" href="/staff/forgot-password">Password dimenticata?</a>
+            <LinkToMenu />
+          </div>
         </form>
       ) : (
         <SetupNotice />

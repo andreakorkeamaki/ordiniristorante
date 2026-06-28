@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { OfflineBanner } from "@/components/offline-banner";
+import { RecoveryRedirect } from "@/components/recovery-redirect";
 
 export const metadata: Metadata = {
   title: {
@@ -27,6 +28,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="it">
       <body>
+        <RecoveryRedirect />
         <OfflineBanner />
         {children}
       </body>
