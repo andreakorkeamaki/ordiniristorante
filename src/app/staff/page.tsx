@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { login } from "@/app/staff/actions";
 import { SetupNotice } from "@/components/setup-notice";
 import { getCurrentProfile } from "@/lib/auth";
+import { getPublicMenuHref } from "@/lib/host-routing";
 import { hasSupabaseEnv } from "@/lib/supabase/config";
 
 export const metadata: Metadata = { title: "Accesso staff" };
@@ -62,5 +63,5 @@ export default async function StaffLoginPage({
 }
 
 function LinkToMenu() {
-  return <a className="text-link" href="/menu">Apri il menu pubblico</a>;
+  return <a className="text-link" href={getPublicMenuHref()}>Apri il menu pubblico</a>;
 }

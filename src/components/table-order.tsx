@@ -4,7 +4,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QUICK_NOTES, ORDER_STATUS_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/format";
-import { validateAllYouCanEat } from "@/lib/order-calculations";
+import {
+  getOrderSubmissionIssue,
+  validateAllYouCanEat,
+} from "@/lib/order-calculations";
 import { createClient } from "@/lib/supabase/client";
 import type {
   MenuCategory,
@@ -28,6 +31,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
   const [activeCategory, setActiveCategory] = useState("");
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState<"saved" | "saving" | "error">("saved");
+  const [mutationError, setMutationError] = useState("");
   const [presence, setPresence] = useState<string[]>([]);
   const [externalUpdate, setExternalUpdate] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -118,13 +122,16 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
         return;
       }
       setSaving("saving");
+      setMutationError("");
       selfUpdate.current = true;
       try {
         await task();
         await loadOrder();
-      } catch {
-        queue.current.push(task);
+      } catch (error) {
         setSaving("error");
+        setMutationError(
+          error instanceof Error ? error.message : "Operazione non riuscita.",
+        );
       } finally {
         window.setTimeout(() => {
           selfUpdate.current = false;
@@ -213,6 +220,13 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
 
   const editable = order.status === "draft" || profile.role !== "waiter";
   const ayce = validateAllYouCanEat(items, order.cover_count);
+  const submissionIssue = getOrderSubmissionIssue({
+    status: order.status,
+    itemCount: items.length,
+    covers: order.cover_count,
+    saving,
+    allYouCanEat: ayce,
+  });
 
   return (
     <>
@@ -236,6 +250,11 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       {externalUpdate && (
         <button className="external-update" onClick={() => setExternalUpdate(false)}>
           Ordine aggiornato da un altro utente · Chiudi
+        </button>
+      )}
+      {mutationError && (
+        <button className="external-update error-update" onClick={() => setMutationError("")}>
+          {mutationError} · Chiudi
         </button>
       )}
 
@@ -357,7 +376,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
             ))}
           </div>
 
-          {!ayce.valid && <p className="form-error">La formula All You Can Eat deve coprire tutti i coperti.</p>}
+          {!ayce.valid && <p className="form-error">{submissionIssue}</p>}
 
           <label className="general-note">
             Nota generale
@@ -383,9 +402,15 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
 
       <div className="order-bottom-bar">
         <div><span>Totale</span><strong>{formatCurrency(order.total)}</strong></div>
+        {order.status === "draft" && submissionIssue && (
+          <p className="order-send-hint" id="order-send-hint" role="status">
+            {submissionIssue}
+          </p>
+        )}
         <button
           className="button button-primary button-large"
-          disabled={order.status !== "draft" || items.length === 0 || !ayce.valid || saving !== "saved"}
+          aria-describedby={submissionIssue ? "order-send-hint" : undefined}
+          disabled={order.status !== "draft" || submissionIssue !== null}
           onClick={() =>
             void mutate(async () => {
               const { error } = await createClient().rpc("send_order_to_cashier", { p_order_id: order.id });

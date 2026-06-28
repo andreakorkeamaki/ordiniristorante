@@ -956,7 +956,20 @@ code {
 
 .line-main > div {
   display: grid;
+  min-width: 0;
   gap: 0.2rem;
+}
+
+.line-main > div strong,
+.cashier-card li,
+.card-note,
+.admin-row > div:first-child,
+.eyebrow {
+  overflow-wrap: anywhere;
+}
+
+.line-main > strong {
+  flex: 0 0 auto;
 }
 
 .line-main small {
@@ -1076,6 +1089,19 @@ code {
 .order-bottom-bar strong {
   font-family: Georgia, serif;
   font-size: 1.4rem;
+}
+
+.order-send-hint {
+  max-width: 32rem;
+  margin: 0 auto 0 0;
+  color: var(--red);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.error-update {
+  color: var(--red);
+  border-color: #d9a8a2;
 }
 
 /* Cashier */
@@ -1532,7 +1558,19 @@ code {
 
   .app-header {
     gap: 0.5rem;
-    padding-inline: 0.65rem;
+    padding-top: max(0.65rem, env(safe-area-inset-top));
+    padding-right: max(0.65rem, env(safe-area-inset-right));
+    padding-left: max(0.65rem, env(safe-area-inset-left));
+  }
+
+  .brand,
+  .app-nav a,
+  .app-header .text-button {
+    min-height: 2.75rem;
+  }
+
+  .brand {
+    align-items: center;
   }
 
   .brand small {
@@ -1547,11 +1585,14 @@ code {
   }
 
   .app-nav a {
+    display: inline-flex;
+    align-items: center;
     padding-inline: 0.45rem;
     font-size: 0.72rem;
   }
 
   .app-header .text-button {
+    min-width: 2.75rem;
     padding: 0.3rem;
     font-size: 0.72rem;
   }
@@ -1591,8 +1632,61 @@ code {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .category-tabs button,
+  .quick-notes button,
+  .stepper button,
+  .stepper.small button,
+  .danger-link,
+  .admin-tabs button,
+  .admin-row button,
+  .row-actions button,
+  .card-actions button,
+  .active-table-row {
+    min-height: 2.75rem;
+  }
+
+  .stepper {
+    grid-template-columns: 2.75rem 2.75rem 2.75rem;
+  }
+
+  .stepper button,
+  .stepper.small button {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .stepper.small {
+    grid-template-columns: 2.75rem 2.4rem 2.75rem;
+  }
+
+  .line-note,
+  .extra-select {
+    min-height: 2.75rem;
+  }
+
+  .back-link {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+    margin-bottom: 0.7rem;
+  }
+
+  .order-workspace {
+    padding-bottom: calc(11rem + env(safe-area-inset-bottom));
+  }
+
   .order-bottom-bar {
+    flex-wrap: wrap;
     justify-content: space-between;
+    padding-right: max(1rem, env(safe-area-inset-right));
+    padding-left: max(1rem, env(safe-area-inset-left));
+  }
+
+  .order-send-hint {
+    order: 3;
+    width: 100%;
+    max-width: none;
+    margin: 0;
   }
 
   .order-bottom-bar .button {
@@ -1607,6 +1701,10 @@ code {
   .cashier-board {
     grid-template-columns: repeat(4, 88vw);
     scroll-snap-type: x mandatory;
+  }
+
+  .cashier-column-body {
+    max-height: calc(100dvh - 15rem);
   }
 
   .cashier-column {
@@ -1635,6 +1733,18 @@ code {
   .product-admin-row input[name="ingredients"],
   .product-admin-row select {
     grid-column: 1 / -1;
+  }
+
+  .product-admin-row input,
+  .product-admin-row select,
+  .check-label {
+    min-height: 2.75rem;
+  }
+}
+
+@media (max-width: 380px) {
+  .app-header .brand > span:last-child {
+    display: none;
   }
 }
 

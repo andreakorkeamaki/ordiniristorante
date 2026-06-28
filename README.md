@@ -46,9 +46,21 @@ Nel file `.env.local` inserire:
 ```dotenv
 NEXT_PUBLIC_SUPABASE_URL=https://lnckmyfillppaachcluz.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+NEXT_PUBLIC_MENU_ORIGIN=https://menu.example.it
+NEXT_PUBLIC_APP_ORIGIN=https://ordini.example.it
 ```
 
 La publishable key è progettata per il client ed è protetta da RLS. Non aggiungere mai secret key o `service_role` a variabili `NEXT_PUBLIC_*`.
+
+Le due origini sono opzionali in locale. In produzione permettono di collegare
+due sottodomini allo stesso progetto Vercel:
+
+- `NEXT_PUBLIC_MENU_ORIGIN`: dominio del menu pubblico;
+- `NEXT_PUBLIC_APP_ORIGIN`: dominio riservato a staff, cassa e amministrazione.
+
+Le richieste staff aperte sul dominio menu vengono reindirizzate
+all'applicazione; il percorso `/menu` aperto sul dominio applicazione torna al
+dominio pubblico.
 
 ## Database
 
@@ -159,8 +171,11 @@ I test database pgTAP sono in `supabase/tests`.
 
 1. importare la repository in Vercel;
 2. configurare `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`;
-3. impostare in Supabase **Authentication → URL Configuration** il dominio Vercel;
-4. distribuire con il preset Next.js.
+3. collegare allo stesso progetto i sottodomini menu e applicazione;
+4. configurare `NEXT_PUBLIC_MENU_ORIGIN` e `NEXT_PUBLIC_APP_ORIGIN`;
+5. impostare in Supabase **Authentication → URL Configuration** il sottodominio applicazione;
+6. aggiungere il sottodominio applicazione agli URL di redirect consentiti;
+7. distribuire con il preset Next.js.
 
 Non è necessario configurare una secret key su Vercel per le funzioni attuali.
 

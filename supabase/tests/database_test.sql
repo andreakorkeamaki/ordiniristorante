@@ -1,5 +1,5 @@
 begin;
-select plan(14);
+select plan(21);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -25,6 +25,103 @@ select policies_are(
 );
 select function_returns('public', 'send_order_to_cashier', array['uuid'], 'orders', 'send RPC returns order');
 select function_returns('public', 'change_order_item_quantity', array['uuid', 'integer'], 'order_items', 'quantity RPC returns item');
+
+insert into auth.users (
+  id,
+  email,
+  aud,
+  role,
+  encrypted_password,
+  email_confirmed_at,
+  raw_app_meta_data,
+  raw_user_meta_data,
+  created_at,
+  updated_at
+) values (
+  '00000000-0000-4000-9000-000000009901',
+  'codex-order-test@example.invalid',
+  'authenticated',
+  'authenticated',
+  '',
+  now(),
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"full_name":"Test ordini"}'::jsonb,
+  now(),
+  now()
+);
+
+update public.profiles
+set active = true, role = 'waiter'
+where id = '00000000-0000-4000-9000-000000009901';
+
+set local "request.jwt.claims" =
+  '{"sub":"00000000-0000-4000-9000-000000009901","role":"authenticated"}';
+
+insert into public.restaurant_tables (id, table_number, display_name)
+values
+  ('00000000-0000-4000-9000-000000009911', 9901, 'Test invio valido'),
+  ('00000000-0000-4000-9000-000000009912', 9902, 'Test invio non valido');
+
+insert into public.orders (id, table_id)
+values
+  ('00000000-0000-4000-9000-000000009921', '00000000-0000-4000-9000-000000009911'),
+  ('00000000-0000-4000-9000-000000009922', '00000000-0000-4000-9000-000000009912');
+
+do $$
+begin
+  perform public.add_order_item(
+    '00000000-0000-4000-9000-000000009921',
+    '00000000-0000-4000-8000-000000001001',
+    ''
+  );
+  perform public.add_order_item(
+    '00000000-0000-4000-9000-000000009922',
+    '00000000-0000-4000-8000-000000001045',
+    ''
+  );
+end;
+$$;
+
+select lives_ok(
+  $$select public.send_order_to_cashier('00000000-0000-4000-9000-000000009921')$$,
+  'a valid order can be sent to the cashier'
+);
+select is(
+  (select status::text from public.orders where id = '00000000-0000-4000-9000-000000009921'),
+  'pending_cashier',
+  'sending changes the order status'
+);
+select ok(
+  (select sent_to_cashier_at is not null from public.orders where id = '00000000-0000-4000-9000-000000009921'),
+  'sending records its timestamp'
+);
+select is(
+  (select status::text from public.print_jobs where order_id = '00000000-0000-4000-9000-000000009921'),
+  'pending',
+  'sending creates a pending print job'
+);
+select is(
+  (
+    select count(*)::integer
+    from public.order_activity
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and action = 'sent_to_cashier'
+  ),
+  1,
+  'sending writes an audit event'
+);
+
+select throws_ok(
+  $$select public.send_order_to_cashier('00000000-0000-4000-9000-000000009922')$$,
+  'P0001',
+  'Le formule All You Can Eat (1) e i coperti (0) devono coincidere',
+  'an invalid All You Can Eat order is rejected'
+);
+select is(
+  (select status::text from public.orders where id = '00000000-0000-4000-9000-000000009922'),
+  'draft',
+  'a rejected order remains a draft'
+);
 
 select * from finish();
 rollback;
