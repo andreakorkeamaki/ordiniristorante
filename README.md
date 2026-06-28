@@ -80,7 +80,7 @@ supabase db push --include-seed
 supabase config push
 ```
 
-Il progetto di sviluppo attuale ha già migration, seed e configurazione Auth applicati. Il signup pubblico è disabilitato sia globalmente sia per email. Non eseguire `db reset` su un database che contiene dati reali e non rieseguire manualmente una migration già registrata.
+Il progetto di sviluppo attuale ha già migration, seed e configurazione Auth applicati. Il signup pubblico è disabilitato globalmente; il provider email resta attivo perché login e recupero password devono funzionare. Non eseguire `db reset` su un database che contiene dati reali e non rieseguire manualmente una migration già registrata.
 
 Per verificare il database remoto:
 
