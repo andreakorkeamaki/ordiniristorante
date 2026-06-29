@@ -268,15 +268,11 @@ code {
   margin-bottom: 0.6rem;
 }
 
-.menu-brand-lockup {
-  width: min(34rem, 76vw);
-  aspect-ratio: 3.55;
-  background-image: url("/images/la-sagretta-brand-reference.jpeg");
-  background-repeat: no-repeat;
-  background-position: left top;
-  background-size: 150% auto;
-  filter: sepia(0.08) contrast(1.04) saturate(0.92);
-  mix-blend-mode: multiply;
+.menu-brand-logo {
+  display: block;
+  width: min(48rem, 82vw);
+  height: auto;
+  filter: drop-shadow(0 0.25rem 0.15rem rgb(92 41 19 / 8%));
 }
 
 .language-toggle {
@@ -651,15 +647,11 @@ code {
     #4a1d12;
 }
 
-.menu-footer-brand {
+.menu-footer-logo {
+  display: block;
   width: 8rem;
-  aspect-ratio: 3.5;
-  background-image: url("/images/la-sagretta-brand-reference.jpeg");
-  background-repeat: no-repeat;
-  background-position: left top;
-  background-size: 150% auto;
+  height: auto;
   filter: sepia(1) brightness(2.3) saturate(0.4);
-  mix-blend-mode: screen;
 }
 
 .menu-footer strong {
@@ -1799,8 +1791,8 @@ code {
     margin-bottom: 0;
   }
 
-  .menu-brand-lockup {
-    width: 72vw;
+  .menu-brand-logo {
+    width: 74vw;
   }
 
   .language-toggle {
@@ -1906,7 +1898,7 @@ code {
     gap: 0.75rem;
   }
 
-  .menu-footer-brand {
+  .menu-footer-logo {
     width: 6.5rem;
   }
 

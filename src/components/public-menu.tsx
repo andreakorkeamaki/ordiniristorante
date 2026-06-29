@@ -92,10 +92,14 @@ export function PublicMenu() {
       <header className="menu-hero">
         <div className="menu-hero-inner">
           <div className="menu-hero-top">
-            <div
-              className="menu-brand-lockup"
-              role="img"
-              aria-label="La Sagretta, tavola calda, pinsa romana e cucina casareccia"
+            <Image
+              className="menu-brand-logo"
+              src="/images/la-sagretta-logo.png"
+              alt="La Sagretta, tavola calda, pinsa romana e cucina casareccia"
+              width={2051}
+              height={767}
+              priority
+              sizes="(max-width: 640px) 74vw, 48rem"
             />
             <button
               className="language-toggle"
@@ -212,7 +216,14 @@ export function PublicMenu() {
       </div>
 
       <footer className="menu-footer">
-        <div className="menu-footer-brand" aria-hidden="true" />
+        <Image
+          className="menu-footer-logo"
+          src="/images/la-sagretta-logo.png"
+          alt=""
+          width={2051}
+          height={767}
+          sizes="8rem"
+        />
         <div>
           <strong>{data.settings.restaurant_name}</strong>
           <p>Il gusto di casa, ogni giorno.</p>
