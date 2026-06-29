@@ -6,6 +6,7 @@ export function PrintTicket({ order, label }: { order: Order; label: string }) {
     <article className="ticket">
       <header>
         <h2>LA SAGRETTA</h2>
+        <strong>{label}</strong>
         <strong>COMANDA #{order.order_number}</strong>
       </header>
       <div className="ticket-meta">

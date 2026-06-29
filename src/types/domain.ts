@@ -8,6 +8,7 @@ export type OrderStatus =
   | "closed"
   | "cancelled";
 export type PrintStatus = "pending" | "printing" | "printed" | "failed" | "cancelled";
+export type PrintJobType = "new_order" | "order_update" | "cancellation" | "reprint";
 export type PreparationArea = "pizzeria" | "cucina" | "bar" | "cassa";
 
 export interface Profile {
@@ -125,13 +126,22 @@ export interface Order {
 export interface PrintJob {
   id: string;
   order_id: string;
+  job_type: PrintJobType;
+  idempotency_key: string;
   status: PrintStatus;
   copies: number;
   printer_target: string;
   labels: string[];
   retry_count: number;
   error_message: string | null;
+  printnode_job_id: number | null;
+  processing_started_at: string | null;
+  submitted_at: string | null;
+  failed_at: string | null;
+  last_attempt_at: string | null;
+  manual_fallback: boolean;
   created_at: string;
+  updated_at: string;
   printed_at: string | null;
 }
 

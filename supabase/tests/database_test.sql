@@ -1,11 +1,12 @@
 begin;
-select plan(21);
+select plan(32);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
 select has_table('public', 'print_jobs', 'print_jobs exists');
 select has_table('public', 'menu_items', 'menu_items exists');
 select has_index('public', 'orders', 'orders_one_active_per_table_idx', 'one active order index exists');
+select has_index('public', 'print_jobs', 'print_jobs_order_type_key', 'print jobs are unique by order and type');
 select col_type_is('public', 'orders', 'total', 'numeric(10,2)', 'order totals use exact numeric values');
 select col_type_is('public', 'menu_items', 'price', 'numeric(10,2)', 'menu prices use exact numeric values');
 select col_is_pk('public', 'profiles', 'id', 'profiles id is primary key');
@@ -103,6 +104,42 @@ select is(
 select is(
   (
     select count(*)::integer
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009921'
+  ),
+  1,
+  'sending creates exactly one print job'
+);
+select is(
+  (
+    select job_type::text
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009921'
+  ),
+  'new_order',
+  'the submitted order creates a new-order job'
+);
+select is(
+  (
+    select copies
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009921'
+  ),
+  3,
+  'the print job always has three copies'
+);
+select is(
+  (
+    select idempotency_key
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009921'
+  ),
+  '00000000-0000-4000-9000-000000009921:new_order',
+  'the idempotency key contains order and type'
+);
+select is(
+  (
+    select count(*)::integer
     from public.order_activity
     where order_id = '00000000-0000-4000-9000-000000009921'
       and action = 'sent_to_cashier'
@@ -121,6 +158,53 @@ select is(
   (select status::text from public.orders where id = '00000000-0000-4000-9000-000000009922'),
   'draft',
   'a rejected order remains a draft'
+);
+
+update public.profiles
+set role = 'cashier'
+where id = '00000000-0000-4000-9000-000000009901';
+
+select lives_ok(
+  $$select public.request_reprint('00000000-0000-4000-9000-000000009921')$$,
+  'a cashier can request a reprint'
+);
+select lives_ok(
+  $$select public.request_reprint('00000000-0000-4000-9000-000000009921')$$,
+  'a repeated reprint request is idempotent'
+);
+select is(
+  (
+    select count(*)::integer
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and job_type = 'reprint'
+  ),
+  1,
+  'only one reprint job exists for the order'
+);
+select lives_ok(
+  $$select public.cancel_order('00000000-0000-4000-9000-000000009921')$$,
+  'a cashier can cancel an order'
+);
+select is(
+  (
+    select status::text
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and job_type = 'cancellation'
+  ),
+  'pending',
+  'cancelling creates a pending cancellation job'
+);
+select is(
+  (
+    select status::text
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and job_type = 'new_order'
+  ),
+  'cancelled',
+  'cancelling stops the unfinished new-order job'
 );
 
 select * from finish();

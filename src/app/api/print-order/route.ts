@@ -1,0 +1,256 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { getCurrentProfile } from "@/lib/auth";
+import {
+  cancelPrintNodeJobs,
+  createPrintNodeJob,
+  getPrinterAvailability,
+  getPrintNodeJobStates,
+} from "@/lib/printnode";
+import { buildRaw80mmTicket, PRINT_JOB_LABELS } from "@/lib/print-ticket-raw";
+import { createClient } from "@/lib/supabase/server";
+import type {
+  Order,
+  OrderItem,
+  PrintJob,
+  Profile,
+  RestaurantTable,
+} from "@/types/domain";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const bodySchema = z.object({
+  orderId: z.uuid(),
+  type: z.enum(["new_order", "order_update", "cancellation", "reprint"]),
+});
+
+async function requireCashier() {
+  const profile = await getCurrentProfile();
+  if (!profile?.active || !["cashier", "admin"].includes(profile.role)) {
+    return null;
+  }
+  return profile;
+}
+
+export async function GET() {
+  if (!(await requireCashier())) {
+    return NextResponse.json({ error: "Non autorizzato" }, { status: 401 });
+  }
+
+  const supabase = await createClient();
+  if (!supabase) {
+    return NextResponse.json({ error: "Supabase non configurato" }, { status: 503 });
+  }
+
+  const availability = await getPrinterAvailability();
+
+  if (availability.configured) {
+    const { data: printingJobs } = await supabase
+      .from("print_jobs")
+      .select("id, printnode_job_id")
+      .eq("status", "printing")
+      .not("printnode_job_id", "is", null);
+
+    const localJobs = printingJobs ?? [];
+    const ids = localJobs
+      .map((job) => Number(job.printnode_job_id))
+      .filter((id) => Number.isSafeInteger(id) && id > 0);
+
+    if (ids.length) {
+      try {
+        const states = await getPrintNodeJobStates(ids);
+        const latest = new Map<number, (typeof states)[number]>();
+        for (const state of states) {
+          const current = latest.get(state.printJobId);
+          if (
+            !current ||
+            new Date(state.createTimestamp).getTime() > new Date(current.createTimestamp).getTime()
+          ) {
+            latest.set(state.printJobId, state);
+          }
+        }
+
+        for (const job of localJobs) {
+          const state = latest.get(Number(job.printnode_job_id));
+          if (!state) continue;
+
+          if (state.state === "done") {
+            await supabase.rpc("mark_print_job_delivered", { p_job_id: job.id });
+          } else if (state.state === "error" || state.state === "expired") {
+            await supabase
+              .from("print_jobs")
+              .update({
+                status: "failed",
+                error_message: state.message ?? `PrintNode: ${state.state}`,
+                failed_at: new Date().toISOString(),
+              })
+              .eq("id", job.id);
+          }
+        }
+      } catch {
+        // The availability response still gives the cashier a usable manual fallback.
+      }
+    }
+  }
+
+  return NextResponse.json(availability, {
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+
+export async function POST(request: Request) {
+  const profile = await requireCashier();
+  if (!profile) {
+    return NextResponse.json({ error: "Non autorizzato" }, { status: 401 });
+  }
+
+  const parsed = bodySchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Richiesta di stampa non valida" }, { status: 400 });
+  }
+
+  const supabase = await createClient();
+  if (!supabase) {
+    return NextResponse.json({ error: "Supabase non configurato" }, { status: 503 });
+  }
+
+  const { orderId, type } = parsed.data;
+
+  if (type === "reprint") {
+    const { error } = await supabase.rpc("request_reprint", { p_order_id: orderId });
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+
+  const { data: existingJob, error: jobError } = await supabase
+    .from("print_jobs")
+    .select("*")
+    .eq("order_id", orderId)
+    .eq("job_type", type)
+    .maybeSingle();
+
+  if (jobError || !existingJob) {
+    return NextResponse.json(
+      { error: jobError?.message ?? "Job di stampa non disponibile" },
+      { status: 404 },
+    );
+  }
+
+  const job = existingJob as PrintJob;
+  if (job.status === "printing" || job.status === "printed" || job.status === "cancelled") {
+    return NextResponse.json({ job, idempotent: true });
+  }
+
+  const now = new Date().toISOString();
+  const { data: claimedJob, error: claimError } = await supabase
+    .from("print_jobs")
+    .update({
+      status: "printing",
+      processing_started_at: now,
+      last_attempt_at: now,
+      retry_count: job.retry_count + 1,
+      failed_at: null,
+      error_message: null,
+      manual_fallback: false,
+    })
+    .eq("id", job.id)
+    .in("status", ["pending", "failed"])
+    .select("*")
+    .maybeSingle();
+
+  if (claimError) {
+    return NextResponse.json({ error: claimError.message }, { status: 400 });
+  }
+  if (!claimedJob) {
+    return NextResponse.json({ job, idempotent: true });
+  }
+
+  try {
+    if (type === "cancellation") {
+      const { data: priorJobs } = await supabase
+        .from("print_jobs")
+        .select("printnode_job_id")
+        .eq("order_id", orderId)
+        .neq("job_type", "cancellation")
+        .not("printnode_job_id", "is", null);
+      const priorIds = (priorJobs ?? [])
+        .map((priorJob) => Number(priorJob.printnode_job_id))
+        .filter((id) => Number.isSafeInteger(id) && id > 0);
+      await cancelPrintNodeJobs(priorIds);
+    }
+
+    const availability = await getPrinterAvailability();
+    if (!availability.available) throw new Error(availability.message);
+
+    const order = await loadOrder(supabase, orderId);
+    if (!order) throw new Error("Ordine non disponibile");
+
+    const printNodeJobId = await createPrintNodeJob({
+      title: `${PRINT_JOB_LABELS[type]} #${order.order_number}`,
+      content: buildRaw80mmTicket(order, type),
+      idempotencyKey: job.idempotency_key,
+    });
+
+    const { data: savedJob, error: saveError } = await supabase
+      .from("print_jobs")
+      .update({
+        printnode_job_id: printNodeJobId,
+        submitted_at: new Date().toISOString(),
+        error_message: null,
+      })
+      .eq("id", job.id)
+      .select("*")
+      .single();
+
+    if (saveError) throw saveError;
+    return NextResponse.json({ job: savedJob, printer: availability.printer });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invio a PrintNode fallito";
+    await supabase
+      .from("print_jobs")
+      .update({
+        status: "failed",
+        error_message: message,
+        failed_at: new Date().toISOString(),
+      })
+      .eq("id", job.id);
+
+    return NextResponse.json(
+      { error: message, fallback: "manual", jobId: job.id },
+      { status: 503 },
+    );
+  }
+}
+
+async function loadOrder(
+  supabase: NonNullable<Awaited<ReturnType<typeof createClient>>>,
+  orderId: string,
+) {
+  const [orderResult, tableResult, profilesResult, linesResult] = await Promise.all([
+    supabase.from("orders").select("*").eq("id", orderId).maybeSingle(),
+    supabase.from("restaurant_tables").select("*"),
+    supabase.from("profiles").select("id, full_name, role, active"),
+    supabase
+      .from("order_items")
+      .select("*, extras:order_item_extras(*)")
+      .eq("order_id", orderId)
+      .order("created_at"),
+  ]);
+
+  if (!orderResult.data) return null;
+
+  const rawOrder = orderResult.data as Order;
+  const tables = new Map(
+    ((tableResult.data ?? []) as RestaurantTable[]).map((table) => [table.id, table]),
+  );
+  const profiles = new Map(
+    ((profilesResult.data ?? []) as Profile[]).map((item) => [item.id, item]),
+  );
+
+  return {
+    ...rawOrder,
+    table: tables.get(rawOrder.table_id),
+    waiter: profiles.get(rawOrder.created_by),
+    items: (linesResult.data ?? []) as OrderItem[],
+  } satisfies Order;
+}

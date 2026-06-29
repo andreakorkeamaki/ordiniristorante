@@ -48,9 +48,13 @@ NEXT_PUBLIC_SUPABASE_URL=https://lnckmyfillppaachcluz.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 NEXT_PUBLIC_MENU_ORIGIN=https://menu.example.it
 NEXT_PUBLIC_APP_ORIGIN=https://ordini.example.it
+PRINTNODE_API_KEY=printnode_server_only_api_key
+PRINTNODE_PRINTER_ID=123456
 ```
 
 La publishable key è progettata per il client ed è protetta da RLS. Non aggiungere mai secret key o `service_role` a variabili `NEXT_PUBLIC_*`.
+Anche `PRINTNODE_API_KEY` e `PRINTNODE_PRINTER_ID` sono variabili esclusivamente
+server-side: non devono avere il prefisso `NEXT_PUBLIC_`.
 
 Le due origini sono opzionali in locale. In produzione permettono di collegare
 due sottodomini allo stesso progetto Vercel:
@@ -140,20 +144,30 @@ Il recupero password parte da `/staff/forgot-password` e termina su `/staff/rese
 - RLS: accesso anonimo limitato al menu pubblico; permessi distinti per waiter, cashier e admin.
 - Prezzi e descrizioni vengono copiati nelle righe ordine; le modifiche future al menu non alterano lo storico.
 - Totali, snapshot e audit sono calcolati nel database.
-- `send_order_to_cashier` aggiorna ordine e print job nella stessa transazione.
+- il passaggio `draft → pending_cashier` (submitted) crea una sola stampa
+  `new_order` pending nella stessa transazione;
+- `new_order`, `order_update`, `cancellation` e `reprint` hanno chiavi
+  idempotenti separate per ordine e tipo.
 
 ## Stampa
 
-`src/lib/print-adapter.ts` espone `PrintAdapter`. L’implementazione iniziale restituisce `not_configured`: non simula una stampante.
+`POST /api/print-order` legge ordine e righe sul server, genera un ticket RAW
+ESC/POS da 80 mm e lo invia a PrintNode. L’API key e l’id stampante non vengono
+mai inviati al browser. Per la stampa RAW viene usato `qty: 3`, quindi PrintNode
+consegna tre copie senza dipendere dal supporto copie del driver.
 
 La cassa offre:
 
-- preview da 80 mm;
-- tre copie PIZZERIA, CUCINA e CASSA;
-- fallback “Stampa dal browser”;
-- cambio stato solo tramite “Segna stampato”.
+- stato PrintNode, stampante e computer Dell;
+- lista job pending, printing e failed;
+- preview da 80 mm e tre copie PIZZERIA, CUCINA e CASSA;
+- ticket distinti per nuovo ordine, aggiornamento, annullamento e ristampa;
+- etichetta `RISTAMPA` sulle ristampe;
+- fallback “Stampa dal browser” con registrazione manuale del completamento.
 
-Per collegare in futuro tablet Android e stampante termica, creare una nuova implementazione di `PrintAdapter` e sostituire `unconfiguredPrintAdapter`.
+Il client PrintNode deve essere installato e connesso sul Dell e la stampante
+termica deve accettare job RAW ESC/POS. Se PrintNode, Dell o stampante non sono
+disponibili, il job passa a `failed` e resta stampabile manualmente dalla cassa.
 
 ## Verifiche
 
@@ -170,14 +184,16 @@ I test database pgTAP sono in `supabase/tests`.
 ## Vercel
 
 1. importare la repository in Vercel;
-2. configurare `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`;
+2. configurare `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`,
+   `PRINTNODE_API_KEY` e `PRINTNODE_PRINTER_ID`;
 3. collegare allo stesso progetto i sottodomini menu e applicazione;
 4. configurare `NEXT_PUBLIC_MENU_ORIGIN` e `NEXT_PUBLIC_APP_ORIGIN`;
 5. impostare in Supabase **Authentication → URL Configuration** il sottodominio applicazione;
 6. aggiungere il sottodominio applicazione agli URL di redirect consentiti;
 7. distribuire con il preset Next.js.
 
-Non è necessario configurare una secret key su Vercel per le funzioni attuali.
+Non è necessaria una Supabase secret key su Vercel: l’endpoint usa la sessione
+autenticata della cassa e le policy RLS.
 
 ## App precedente
 
