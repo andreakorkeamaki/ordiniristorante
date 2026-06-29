@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { DEFAULT_SETTINGS } from "@/lib/constants";
@@ -89,32 +90,60 @@ export function PublicMenu() {
   return (
     <>
       <header className="menu-hero">
-        <div className="menu-hero-top">
-          <span className="brand-mark brand-mark-large">LS</span>
-          <button
-            className="language-toggle"
-            type="button"
-            onClick={() => setLanguage((current) => (current === "it" ? "en" : "it"))}
-            aria-label="Cambia lingua"
-          >
-            {language === "it" ? "IT · EN" : "EN · IT"}
-          </button>
+        <div className="menu-hero-inner">
+          <div className="menu-hero-top">
+            <div
+              className="menu-brand-lockup"
+              role="img"
+              aria-label="La Sagretta, tavola calda, pinsa romana e cucina casareccia"
+            />
+            <button
+              className="language-toggle"
+              type="button"
+              onClick={() => setLanguage((current) => (current === "it" ? "en" : "it"))}
+              aria-label="Cambia lingua"
+            >
+              {language === "it" ? "IT · EN" : "EN · IT"}
+            </button>
+          </div>
+
+          <div className="menu-hero-main">
+            <div className="menu-hero-copy">
+              <p className="menu-poster-label">
+                {language === "en" ? "Digital menu" : "Il menu digitale"}
+              </p>
+              <h1>
+                {language === "en" ? "The taste of home." : "Il gusto di casa."}
+              </h1>
+              <p>
+                {language === "en"
+                  ? "Roman pinsa, hot dishes and homemade cooking, prepared with care every day."
+                  : "Pinsa romana, tavola calda e cucina casareccia, preparate con cura ogni giorno."}
+              </p>
+
+              <label className="menu-search">
+                <span aria-hidden="true">⌕</span>
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={language === "it" ? "Cerca nel menu" : "Search the menu"}
+                />
+              </label>
+            </div>
+
+            <div className="menu-hero-food" aria-hidden="true">
+              <span className="menu-hero-burst">Fatta con cura</span>
+              <Image
+                src="/images/la-sagretta-pinsa.png"
+                alt=""
+                width={1536}
+                height={1024}
+                priority
+                sizes="(max-width: 700px) 110vw, 48vw"
+              />
+            </div>
+          </div>
         </div>
-        <p className="eyebrow">Pinsa · Cucina · Mare</p>
-        <h1>{data.settings.restaurant_name}</h1>
-        <p>
-          {language === "en"
-            ? "Our menu, prepared with care. English translations are being completed."
-            : "Il nostro menu, preparato con cura. Chiedi al personale per ogni esigenza."}
-        </p>
-        <label className="menu-search">
-          <span aria-hidden="true">⌕</span>
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={language === "it" ? "Cerca nel menu" : "Search the menu"}
-          />
-        </label>
       </header>
 
       {error && <p className="form-error menu-error">{error}</p>}
@@ -136,13 +165,20 @@ export function PublicMenu() {
           if (!items.length && !extras.length) return null;
 
           return (
-            <section className="menu-category" id={`category-${category.slug}`} key={category.id}>
+            <section
+              className={`menu-category menu-category-${categoryTone(category.slug)}`}
+              id={`category-${category.slug}`}
+              key={category.id}
+            >
               <div className="section-heading">
-                <span>{String(category.sort_order + 1).padStart(2, "0")}</span>
-                <div>
+                <div className="section-heading-copy">
+                  <span className="section-number">
+                    — {String(category.sort_order + 1).padStart(2, "0")} —
+                  </span>
                   <h2>{translated(category.name, category.name_en, language)}</h2>
                   {category.description && <p>{category.description}</p>}
                 </div>
+                <CategoryArtwork slug={category.slug} />
               </div>
               <div className="public-products">
                 {items.map((item) => (
@@ -150,7 +186,10 @@ export function PublicMenu() {
                 ))}
                 {extras.map((extra) => (
                   <article className="public-product" key={extra.id}>
-                    <div><h3>{extra.name}</h3></div>
+                    <div className="product-title-line">
+                      <h3>{extra.name}</h3>
+                      <span className="product-leader" aria-hidden="true" />
+                    </div>
                     <strong>{formatCurrency(extra.price)}</strong>
                   </article>
                 ))}
@@ -173,8 +212,11 @@ export function PublicMenu() {
       </div>
 
       <footer className="menu-footer">
-        <span className="brand-mark">LS</span>
-        <p>La Sagretta · Menu digitale</p>
+        <div className="menu-footer-brand" aria-hidden="true" />
+        <div>
+          <strong>{data.settings.restaurant_name}</strong>
+          <p>Il gusto di casa, ogni giorno.</p>
+        </div>
       </footer>
     </>
   );
@@ -190,6 +232,7 @@ function MenuProduct({ item, language }: { item: MenuItem; language: "it" | "en"
       <div>
         <div className="product-title-line">
           <h3>{name}</h3>
+          <span className="product-leader" aria-hidden="true" />
           <div className="product-tags">
             {item.vegan && <span>Vegan</span>}
             {!item.vegan && item.vegetarian && <span>Veg</span>}
@@ -204,6 +247,42 @@ function MenuProduct({ item, language }: { item: MenuItem; language: "it" | "en"
       <strong>{formatCurrency(item.price)}</strong>
     </article>
   );
+}
+
+function CategoryArtwork({ slug }: { slug: string }) {
+  if (slug === "antipasti") {
+    return (
+      <Image
+        className="category-artwork category-artwork-antipasti"
+        src="/images/la-sagretta-antipasti.png"
+        alt="Tagliere di antipasti della casa"
+        width={1536}
+        height={1024}
+        sizes="(max-width: 700px) 70vw, 24rem"
+      />
+    );
+  }
+
+  if (slug === "rosse") {
+    return (
+      <Image
+        className="category-artwork category-artwork-pinsa"
+        src="/images/la-sagretta-pinsa.png"
+        alt="Pinsa rossa con mozzarella, pomodorini e basilico"
+        width={1536}
+        height={1024}
+        sizes="(max-width: 700px) 70vw, 23rem"
+      />
+    );
+  }
+
+  return null;
+}
+
+function categoryTone(slug: string) {
+  if (["bianche", "all-you-can-eat", "bimbi", "bevande"].includes(slug)) return "green";
+  if (["speciali", "sapori-mare"].includes(slug)) return "blue";
+  return "red";
 }
 
 function translated(italian: string | null, english: string | null, language: "it" | "en") {
