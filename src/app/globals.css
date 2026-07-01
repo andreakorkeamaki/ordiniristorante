@@ -196,12 +196,22 @@ code {
   position: sticky;
   z-index: 100;
   top: 0;
+  display: grid;
+  gap: 0.2rem;
   padding: 0.6rem 1rem;
   color: #fff;
-  background: #221c18;
+  background: #7c241e;
   font-size: 0.82rem;
-  font-weight: 700;
   text-align: center;
+}
+
+.offline-banner strong {
+  font-weight: 800;
+}
+
+.offline-banner span {
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
 /* Public menu */
@@ -1329,6 +1339,22 @@ code {
   border-color: #d9a8a2;
 }
 
+.connection-action-hint,
+.card-print-status {
+  margin: 0 0 1rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid #d9a8a2;
+  border-radius: 0.65rem;
+  color: #7c241e;
+  background: #fff1ee;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.card-print-status {
+  margin: 0.65rem 0;
+}
+
 /* Cashier */
 .cashier-heading {
   align-items: center;
@@ -1687,6 +1713,12 @@ code {
   font-size: 1.1rem;
 }
 
+.ticket header strong:first-of-type,
+.ticket-meta p:first-child {
+  font-size: 1.2rem;
+  font-weight: 900;
+}
+
 .ticket p {
   margin: 0.3rem 0;
 }
@@ -1694,7 +1726,7 @@ code {
 .ticket-meta,
 .ticket-lines,
 .ticket-notes,
-.ticket-total {
+.ticket-summary {
   padding: 0.65rem 0;
   border-bottom: 1px dashed #000;
 }
@@ -1708,7 +1740,7 @@ code {
   margin-left: 1.2rem;
 }
 
-.ticket-total {
+.ticket-summary {
   font-weight: 800;
 }
 
@@ -1731,6 +1763,17 @@ code {
   overflow-x: auto;
   gap: 0.4rem;
   margin-bottom: 1rem;
+}
+
+.admin-write-scope {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.admin-write-scope:disabled {
+  opacity: 0.78;
 }
 
 .admin-grid {

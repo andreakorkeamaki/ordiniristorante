@@ -1,5 +1,7 @@
 import "server-only";
 
+import { buildPrintNodePayload } from "@/lib/printnode-payload";
+
 const PRINTNODE_BASE_URL = "https://api.printnode.com";
 
 export interface PrintNodePrinter {
@@ -27,6 +29,16 @@ export interface PrinterAvailability {
   available: boolean;
   printer: PrintNodePrinter | null;
   message: string;
+}
+
+export class PrintNodeSubmissionError extends Error {
+  readonly outcomeUncertain: boolean;
+
+  constructor(message: string, outcomeUncertain = false) {
+    super(message);
+    this.name = "PrintNodeSubmissionError";
+    this.outcomeUncertain = outcomeUncertain;
+  }
 }
 
 function getConfig() {
@@ -121,30 +133,37 @@ export async function createPrintNodeJob(input: {
   const config = getConfig();
   if (!config) throw new Error("PrintNode non configurato");
 
-  const response = await request("/printjobs", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Idempotency-Key": input.idempotencyKey,
-    },
-    body: JSON.stringify({
-      printerId: config.printerId,
-      title: input.title,
-      contentType: "raw_base64",
-      content: input.content.toString("base64"),
-      source: "La Sagretta cassa",
-      qty: 3,
-      expireAfter: 600,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await request("/printjobs", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": input.idempotencyKey,
+      },
+      body: JSON.stringify(buildPrintNodePayload({
+        printerId: config.printerId,
+        title: input.title,
+        content: input.content,
+      })),
+    });
+  } catch (error) {
+    throw new PrintNodeSubmissionError(
+      error instanceof Error ? error.message : "PrintNode non raggiungibile",
+      true,
+    );
+  }
 
   if (!response.ok) {
-    throw new Error(await errorMessage(response));
+    throw new PrintNodeSubmissionError(await errorMessage(response));
   }
 
   const printNodeJobId = Number(await response.json());
   if (!Number.isSafeInteger(printNodeJobId) || printNodeJobId <= 0) {
-    throw new Error("PrintNode ha restituito un identificativo non valido");
+    throw new PrintNodeSubmissionError(
+      "PrintNode ha restituito un identificativo non valido",
+      true,
+    );
   }
 
   return printNodeJobId;

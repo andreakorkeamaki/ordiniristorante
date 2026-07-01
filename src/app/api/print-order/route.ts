@@ -1,14 +1,18 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentProfile } from "@/lib/auth";
+import { getWaiterInitialPrintDecision } from "@/lib/automatic-print-policy";
 import {
   cancelPrintNodeJobs,
   createPrintNodeJob,
   getPrinterAvailability,
   getPrintNodeJobStates,
+  PrintNodeSubmissionError,
 } from "@/lib/printnode";
 import { buildRaw80mmTicket, PRINT_JOB_LABELS } from "@/lib/print-ticket-raw";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   Order,
   OrderItem,
@@ -31,6 +35,11 @@ async function requireCashier() {
     return null;
   }
   return profile;
+}
+
+async function requireActiveProfile() {
+  const profile = await getCurrentProfile();
+  return profile?.active ? profile : null;
 }
 
 export async function GET() {
@@ -100,7 +109,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const profile = await requireCashier();
+  const profile = await requireActiveProfile();
   if (!profile) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 401 });
   }
@@ -110,15 +119,72 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Richiesta di stampa non valida" }, { status: 400 });
   }
 
-  const supabase = await createClient();
-  if (!supabase) {
+  const sessionClient = await createClient();
+  if (!sessionClient) {
     return NextResponse.json({ error: "Supabase non configurato" }, { status: 503 });
   }
 
   const { orderId, type } = parsed.data;
+  const isWaiter = profile.role === "waiter";
+  const adminClient = createAdminClient();
+
+  if (isWaiter && type !== "new_order") {
+    return NextResponse.json(
+      { error: "Il cameriere può avviare solo la prima stampa della nuova comanda" },
+      { status: 403 },
+    );
+  }
+
+  if (isWaiter && !adminClient) {
+    return NextResponse.json(
+      { error: "Stampa automatica non configurata sul server" },
+      { status: 503 },
+    );
+  }
+
+  const supabase = adminClient ?? sessionClient;
+
+  if (isWaiter) {
+    const initialOrder = await getOrderForAutomaticPrint(supabase, orderId);
+    if (!initialOrder) {
+      return NextResponse.json({ error: "Comanda non disponibile" }, { status: 404 });
+    }
+    const decision = getWaiterInitialPrintDecision(profile.id, initialOrder);
+    if (decision === "not-owner") {
+      return NextResponse.json({ error: "Comanda non disponibile" }, { status: 404 });
+    }
+    if (decision === "invalid-status") {
+      return NextResponse.json(
+        { error: "Questa comanda non può avviare una nuova stampa" },
+        { status: 409 },
+      );
+    }
+    if (decision === "submission-too-old") {
+      return NextResponse.json(
+        { error: "La stampa iniziale di questa comanda deve essere gestita dalla cassa" },
+        { status: 403 },
+      );
+    }
+
+    if (initialOrder.status === "draft") {
+      const { error } = await sessionClient.rpc("send_order_to_cashier", {
+        p_order_id: orderId,
+      });
+      if (error) {
+        const currentOrder = await getOrderForAutomaticPrint(supabase, orderId);
+        if (
+          !currentOrder ||
+          currentOrder.created_by !== profile.id ||
+          currentOrder.status !== "pending_cashier"
+        ) {
+          return NextResponse.json({ error: error.message }, { status: 400 });
+        }
+      }
+    }
+  }
 
   if (type === "reprint") {
-    const { error } = await supabase.rpc("request_reprint", { p_order_id: orderId });
+    const { error } = await sessionClient.rpc("request_reprint", { p_order_id: orderId });
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   }
 
@@ -138,7 +204,21 @@ export async function POST(request: Request) {
 
   const job = existingJob as PrintJob;
   if (job.status === "printing" || job.status === "printed" || job.status === "cancelled") {
-    return NextResponse.json({ job, idempotent: true });
+    return NextResponse.json(
+      isWaiter
+        ? { printStatus: job.status, idempotent: true, orderAccepted: true }
+        : { job, idempotent: true, orderAccepted: true },
+    );
+  }
+  if (isWaiter && job.status === "failed") {
+    return NextResponse.json(
+      {
+        error: job.error_message ?? "Stampa non riuscita: interviene la cassa",
+        printStatus: job.status,
+        orderAccepted: true,
+      },
+      { status: 409 },
+    );
   }
 
   const now = new Date().toISOString();
@@ -154,7 +234,7 @@ export async function POST(request: Request) {
       manual_fallback: false,
     })
     .eq("id", job.id)
-    .in("status", ["pending", "failed"])
+    .in("status", isWaiter ? ["pending"] : ["pending", "failed"])
     .select("*")
     .maybeSingle();
 
@@ -162,7 +242,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: claimError.message }, { status: 400 });
   }
   if (!claimedJob) {
-    return NextResponse.json({ job, idempotent: true });
+    return NextResponse.json(
+      isWaiter
+        ? { printStatus: job.status, idempotent: true, orderAccepted: true }
+        : { job, idempotent: true, orderAccepted: true },
+    );
   }
 
   try {
@@ -203,27 +287,50 @@ export async function POST(request: Request) {
       .single();
 
     if (saveError) throw saveError;
-    return NextResponse.json({ job: savedJob, printer: availability.printer });
+    return NextResponse.json(
+      isWaiter
+        ? { printStatus: savedJob.status, orderAccepted: true }
+        : {
+            job: savedJob,
+            printer: availability.printer,
+            orderAccepted: true,
+          },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invio a PrintNode fallito";
-    await supabase
-      .from("print_jobs")
-      .update({
-        status: "failed",
-        error_message: message,
-        failed_at: new Date().toISOString(),
-      })
-      .eq("id", job.id);
+    const outcomeUncertain =
+      error instanceof PrintNodeSubmissionError && error.outcomeUncertain;
+
+    await supabase.from("print_jobs").update(
+      outcomeUncertain
+        ? {
+            error_message:
+              "Esito stampa incerto: verificare la stampante prima di ristampare",
+          }
+        : {
+            status: "failed",
+            error_message: message,
+            failed_at: new Date().toISOString(),
+          },
+    ).eq("id", job.id);
 
     return NextResponse.json(
-      { error: message, fallback: "manual", jobId: job.id },
+      {
+        error: outcomeUncertain
+          ? "PrintNode non ha confermato l'esito: verificare la stampante"
+          : message,
+        fallback: "manual",
+        ...(!isWaiter && { jobId: job.id }),
+        orderAccepted: true,
+        outcome: outcomeUncertain ? "uncertain" : "failed",
+      },
       { status: 503 },
     );
   }
 }
 
 async function loadOrder(
-  supabase: NonNullable<Awaited<ReturnType<typeof createClient>>>,
+  supabase: SupabaseClient,
   orderId: string,
 ) {
   const [orderResult, tableResult, profilesResult, linesResult] = await Promise.all([
@@ -253,4 +360,17 @@ async function loadOrder(
     waiter: profiles.get(rawOrder.created_by),
     items: (linesResult.data ?? []) as OrderItem[],
   } satisfies Order;
+}
+
+async function getOrderForAutomaticPrint(supabase: SupabaseClient, orderId: string) {
+  const { data } = await supabase
+    .from("orders")
+    .select("id, created_by, status, sent_to_cashier_at")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  return data as Pick<
+    Order,
+    "id" | "created_by" | "status" | "sent_to_cashier_at"
+  > | null;
 }

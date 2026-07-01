@@ -23,7 +23,7 @@ const order: Order = {
   table: {
     id: "00000000-0000-4000-8000-000000000002",
     table_number: 7,
-    display_name: null,
+    display_name: "Terrazza",
     active: true,
   },
   waiter: {
@@ -43,7 +43,16 @@ const order: Order = {
       notes: "ben cotta",
       preparation_area_snapshot: "pizzeria",
       version: 1,
-      extras: [],
+      extras: [
+        {
+          id: "extra-1",
+          order_item_id: "item-1",
+          extra_name_snapshot: "Mozzarella",
+          extra_price_snapshot: 1.5,
+          quantity: 1,
+          total: 1.5,
+        },
+      ],
     },
   ],
 };
@@ -55,9 +64,27 @@ describe("buildRaw80mmTicket", () => {
 
     expect(body).toContain("RISTAMPA");
     expect(body).toContain("COMANDA #42");
-    expect(body).toContain("TAVOLO 7");
+    expect(body).toContain("TAVOLO 7 - Terrazza");
     expect(body).toContain("2x Pinsa Margherita");
     expect(body).toContain("CAMERIERE: Andre");
     expect(ticket.subarray(-4)).toEqual(Buffer.from([0x1d, 0x56, 0x41, 0x10]));
+  });
+
+  it("stampa la nuova comanda operativa senza alcun dato economico", () => {
+    const body = buildRaw80mmTicket(order, "new_order").toString("ascii");
+
+    expect(body).toContain("NUOVA COMANDA");
+    expect(body).toContain("TAVOLO 7");
+    expect(body).toContain("COPERTI: 2");
+    expect(body).toContain("2x Pinsa Margherita");
+    expect(body).toContain("NOTA: ben cotta");
+    expect(body).toContain("+ 1x Mozzarella");
+    expect(body).toContain("NOTE TAVOLO:");
+    expect(body).toContain("Senza fretta");
+
+    expect(body).not.toMatch(/PREZZ|SUBTOTALE|TOTALE|SCONTO|EUR|EURO/i);
+    expect(body).not.toContain("23.80");
+    expect(body).not.toContain("10.00");
+    expect(body).not.toContain("1.50");
   });
 });
