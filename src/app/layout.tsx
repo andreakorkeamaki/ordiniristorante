@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { ConnectionProvider } from "@/components/connection-provider";
 import { LegacyServiceWorkerCleanup } from "@/components/legacy-service-worker-cleanup";
 import { OfflineBanner } from "@/components/offline-banner";
 import { RecoveryRedirect } from "@/components/recovery-redirect";
@@ -31,8 +32,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body>
         <LegacyServiceWorkerCleanup />
         <RecoveryRedirect />
-        <OfflineBanner />
-        {children}
+        <ConnectionProvider>
+          <OfflineBanner />
+          {children}
+        </ConnectionProvider>
       </body>
     </html>
   );

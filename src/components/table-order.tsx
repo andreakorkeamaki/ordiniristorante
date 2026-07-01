@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useConnection } from "@/components/connection-provider";
 import { QUICK_NOTES, ORDER_STATUS_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/format";
 import {
@@ -19,9 +20,10 @@ import type {
   RestaurantTable,
 } from "@/types/domain";
 
-type QueueTask = () => Promise<void>;
+type MutationTask = () => Promise<void>;
 
 export function TableOrder({ tableId, profile }: { tableId: string; profile: Profile }) {
+  const { status, canWrite, blockReason, markUnreliable } = useConnection();
   const [table, setTable] = useState<RestaurantTable | null>(null);
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
@@ -35,8 +37,10 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
   const [presence, setPresence] = useState<string[]>([]);
   const [externalUpdate, setExternalUpdate] = useState(false);
   const [loading, setLoading] = useState(true);
-  const queue = useRef<QueueTask[]>([]);
   const selfUpdate = useRef(false);
+  const initialLoadStarted = useRef(false);
+  const loadedSuccessfully = useRef(false);
+  const wasBlocked = useRef(false);
 
   const loadOrder = useCallback(
     async (create = false) => {
@@ -49,17 +53,24 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
         });
         if (error) {
           setSaving("error");
+          if (isConnectionFailure(error)) markUnreliable();
           setLoading(false);
           return;
         }
         currentOrder = data as Order;
       } else {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from("orders")
           .select("*")
           .eq("table_id", tableId)
           .in("status", ["draft", "pending_cashier", "confirmed", "in_preparation", "bill_requested"])
           .maybeSingle();
+        if (error) {
+          setSaving("error");
+          if (isConnectionFailure(error)) markUnreliable();
+          setLoading(false);
+          return;
+        }
         currentOrder = data as Order | null;
       }
 
@@ -68,20 +79,27 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
         return;
       }
 
-      const { data: lines } = await supabase
+      const { data: lines, error: linesError } = await supabase
         .from("order_items")
         .select("*, extras:order_item_extras(*)")
         .eq("order_id", currentOrder.id)
         .order("created_at");
+      if (linesError) {
+        setSaving("error");
+        if (isConnectionFailure(linesError)) markUnreliable();
+        setLoading(false);
+        return;
+      }
       setOrder(currentOrder);
       setItems((lines ?? []) as OrderItem[]);
       setSaving("saved");
+      loadedSuccessfully.current = true;
       setLoading(false);
     },
-    [tableId],
+    [markUnreliable, tableId],
   );
 
-  const loadBase = useCallback(async () => {
+  const loadBase = useCallback(async (createOrder: boolean) => {
     const supabase = createClient();
     const [tableResult, categoryResult, itemResult, extraResult] = await Promise.all([
       supabase.from("restaurant_tables").select("*").eq("id", tableId).single(),
@@ -89,36 +107,31 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       supabase.from("menu_items").select("*").eq("active", true).eq("visible_staff", true).order("sort_order"),
       supabase.from("menu_extras").select("*").eq("active", true).eq("visible_staff", true).order("sort_order"),
     ]);
+    const firstError =
+      tableResult.error ?? categoryResult.error ?? itemResult.error ?? extraResult.error;
+    if (firstError) {
+      if (isConnectionFailure(firstError)) markUnreliable();
+      setSaving("error");
+      setLoading(false);
+      return;
+    }
+
     const loadedCategories = (categoryResult.data ?? []) as MenuCategory[];
     setTable(tableResult.data as RestaurantTable);
     setCategories(loadedCategories);
     setMenuItems((itemResult.data ?? []) as MenuItem[]);
     setExtras((extraResult.data ?? []) as MenuExtra[]);
     setActiveCategory((current) => current || loadedCategories[0]?.id || "");
-    await loadOrder(true);
-  }, [loadOrder, tableId]);
-
-  const flushQueue = useCallback(async () => {
-    if (!navigator.onLine || queue.current.length === 0) return;
-    setSaving("saving");
-    const pending = [...queue.current];
-    queue.current = [];
-    for (const task of pending) {
-      try {
-        await task();
-      } catch {
-        queue.current.push(task);
-      }
-    }
-    if (queue.current.length) setSaving("error");
-    else await loadOrder();
-  }, [loadOrder]);
+    await loadOrder(createOrder);
+  }, [loadOrder, markUnreliable, tableId]);
 
   const mutate = useCallback(
-    async (task: QueueTask) => {
-      if (!navigator.onLine) {
-        queue.current.push(task);
+    async (task: MutationTask) => {
+      if (!canWrite) {
         setSaving("error");
+        setMutationError(
+          blockReason ?? "Connessione non verificata. Operazione non eseguita.",
+        );
         return;
       }
       setSaving("saving");
@@ -129,8 +142,9 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
         await loadOrder();
       } catch (error) {
         setSaving("error");
+        if (isConnectionFailure(error)) markUnreliable();
         setMutationError(
-          error instanceof Error ? error.message : "Operazione non riuscita.",
+          getErrorMessage(error),
         );
       } finally {
         window.setTimeout(() => {
@@ -138,14 +152,27 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
         }, 500);
       }
     },
-    [loadOrder],
+    [blockReason, canWrite, loadOrder, markUnreliable],
   );
 
   useEffect(() => {
-    queueMicrotask(() => void loadBase());
-    window.addEventListener("online", flushQueue);
-    return () => window.removeEventListener("online", flushQueue);
-  }, [flushQueue, loadBase]);
+    if (status === "checking" || initialLoadStarted.current) return;
+    initialLoadStarted.current = true;
+    queueMicrotask(() => void loadBase(canWrite));
+  }, [canWrite, loadBase, status]);
+
+  useEffect(() => {
+    if (status !== "online") {
+      wasBlocked.current = true;
+      return;
+    }
+    if (!wasBlocked.current) return;
+    wasBlocked.current = false;
+    queueMicrotask(() => {
+      if (loadedSuccessfully.current) void loadOrder();
+      else void loadBase(true);
+    });
+  }, [loadBase, loadOrder, status]);
 
   const orderId = order?.id;
 
@@ -208,25 +235,36 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
     });
   }, [activeCategory, menuItems, search]);
 
-  if (loading) return <div className="loader" aria-label="Caricamento comanda" />;
+  if (loading || status === "checking") {
+    return <div className="loader" aria-label="Caricamento comanda" />;
+  }
   if (!table || !order) {
     return (
       <section className="empty-card">
-        <h1>Tavolo non disponibile</h1>
+        <h1>{canWrite ? "Tavolo non disponibile" : "Comanda non disponibile offline"}</h1>
+        {!canWrite && <p>{blockReason}</p>}
         <Link className="button button-primary" href="/staff/tables">Torna ai tavoli</Link>
       </section>
     );
   }
 
   const editable = order.status === "draft" || profile.role !== "waiter";
+  const writeEnabled = editable && canWrite;
+  const canVerifySubmission =
+    profile.role === "waiter" &&
+    order.status === "pending_cashier" &&
+    isWithinMinutes(order.sent_to_cashier_at, 15);
   const ayce = validateAllYouCanEat(items, order.cover_count);
-  const submissionIssue = getOrderSubmissionIssue({
-    status: order.status,
-    itemCount: items.length,
-    covers: order.cover_count,
-    saving,
-    allYouCanEat: ayce,
-  });
+  const submissionIssue =
+    !canWrite && order.status === "draft"
+      ? blockReason
+      : getOrderSubmissionIssue({
+          status: order.status,
+          itemCount: items.length,
+          covers: order.cover_count,
+          saving,
+          allYouCanEat: ayce,
+        });
 
   return (
     <>
@@ -238,7 +276,13 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
         </div>
         <div className="order-live-status">
           <span className={`save-state save-${saving}`}>
-            {saving === "saved" ? "Salvato" : saving === "saving" ? "Salvataggio…" : "Da sincronizzare"}
+            {!canWrite
+              ? "Modifiche bloccate"
+              : saving === "saved"
+                ? "Salvato"
+                : saving === "saving"
+                  ? "Salvataggio…"
+                  : "Non salvato"}
           </span>
           <span className="status-label">{ORDER_STATUS_LABELS[order.status]}</span>
         </div>
@@ -256,6 +300,12 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
         <button className="external-update error-update" onClick={() => setMutationError("")}>
           {mutationError} · Chiudi
         </button>
+      )}
+      {!canWrite && (
+        <p className="connection-action-hint" role="status">
+          {blockReason} I comandi di modifica restano disabilitati finché il server non
+          viene verificato.
+        </p>
       )}
 
       <div className="order-layout">
@@ -281,7 +331,8 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
             {visibleProducts.map((item) => (
               <button
                 className="product-button"
-                disabled={!editable || !item.available}
+                disabled={!writeEnabled || !item.available}
+                title={!canWrite ? blockReason ?? undefined : undefined}
                 key={item.id}
                 onClick={() =>
                   void mutate(async () => {
@@ -311,9 +362,9 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
           <div className="covers-row">
             <span>Coperti</span>
             <div className="stepper">
-              <button disabled={!editable || order.cover_count === 0} onClick={() => void saveDetails(order.cover_count - 1)}>−</button>
+              <button disabled={!writeEnabled || order.cover_count === 0} onClick={() => void saveDetails(order.cover_count - 1)}>−</button>
               <strong>{order.cover_count}</strong>
-              <button disabled={!editable} onClick={() => void saveDetails(order.cover_count + 1)}>+</button>
+              <button disabled={!writeEnabled} onClick={() => void saveDetails(order.cover_count + 1)}>+</button>
             </div>
           </div>
 
@@ -327,16 +378,16 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
                 </div>
                 <div className="line-actions">
                   <div className="stepper small">
-                    <button disabled={!editable} onClick={() => void quantity(item.id, -1)}>−</button>
+                    <button disabled={!writeEnabled} onClick={() => void quantity(item.id, -1)}>−</button>
                     <strong>{item.quantity}</strong>
-                    <button disabled={!editable} onClick={() => void quantity(item.id, 1)}>+</button>
+                    <button disabled={!writeEnabled} onClick={() => void quantity(item.id, 1)}>+</button>
                   </div>
-                  <button className="danger-link" disabled={!editable} onClick={() => void remove(item.id)}>Rimuovi</button>
+                  <button className="danger-link" disabled={!writeEnabled} onClick={() => void remove(item.id)}>Rimuovi</button>
                 </div>
                 <div className="quick-notes">
                   {QUICK_NOTES.map((note) => (
                     <button
-                      disabled={!editable}
+                      disabled={!writeEnabled}
                       key={note}
                       onClick={() => void saveItemNote(item, item.notes ? `${item.notes}, ${note}` : note)}
                     >
@@ -347,7 +398,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
                 <input
                   className="line-note"
                   defaultValue={item.notes}
-                  disabled={!editable}
+                  disabled={!writeEnabled}
                   placeholder="Nota sulla riga…"
                   onBlur={(event) => {
                     if (event.target.value !== item.notes) void saveItemNote(item, event.target.value);
@@ -360,6 +411,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
                   <select
                     className="extra-select"
                     defaultValue=""
+                    disabled={!canWrite}
                     onChange={(event) => {
                       const extraId = event.target.value;
                       event.target.value = "";
@@ -382,7 +434,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
             Nota generale
             <textarea
               defaultValue={order.general_notes}
-              disabled={!editable}
+              disabled={!writeEnabled}
               placeholder="Es. portare tutto insieme…"
               onBlur={(event) => {
                 if (event.target.value !== order.general_notes) {
@@ -410,15 +462,17 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
         <button
           className="button button-primary button-large"
           aria-describedby={submissionIssue ? "order-send-hint" : undefined}
-          disabled={order.status !== "draft" || submissionIssue !== null}
-          onClick={() =>
-            void mutate(async () => {
-              const { error } = await createClient().rpc("send_order_to_cashier", { p_order_id: order.id });
-              if (error) throw error;
-            })
+          disabled={
+            !canWrite ||
+            (order.status === "draft" ? submissionIssue !== null : !canVerifySubmission)
           }
+          onClick={() => void submitOrder()}
         >
-          {order.status === "draft" ? "Invia alla cassa" : "Comanda inviata"}
+          {order.status === "draft"
+            ? "Invia alla cassa"
+            : canVerifySubmission
+              ? "Verifica invio e stampa"
+              : "Comanda inviata"}
         </button>
       </div>
     </>
@@ -473,4 +527,90 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       if (error) throw error;
     });
   }
+
+  async function submitOrder() {
+    if (!canWrite) {
+      setSaving("error");
+      setMutationError(
+        blockReason ?? "Connessione non verificata. Comanda non inviata.",
+      );
+      return;
+    }
+
+    setSaving("saving");
+    setMutationError("");
+    selfUpdate.current = true;
+
+    try {
+      const response = await fetch("/api/print-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: order!.id, type: "new_order" }),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        orderAccepted?: boolean;
+        outcome?: "failed" | "uncertain";
+      };
+
+      if (!response.ok && !payload.orderAccepted) {
+        setSaving("error");
+        setMutationError(payload.error ?? "Invio della comanda non riuscito");
+        return;
+      }
+
+      await loadOrder();
+      if (!response.ok) {
+        setMutationError(
+          payload.outcome === "uncertain"
+            ? "Comanda arrivata in cassa. Esito stampa incerto: la cassa deve verificare la stampante."
+            : `Comanda arrivata in cassa, ma la stampa è fallita: ${payload.error ?? "interviene la cassa"}.`,
+        );
+      }
+    } catch {
+      setSaving("error");
+      markUnreliable();
+      setMutationError(
+        "Connessione non affidabile. Non è possibile confermare l'invio: non chiudere o ricaricare.",
+      );
+    } finally {
+      window.setTimeout(() => {
+        selfUpdate.current = false;
+      }, 500);
+    }
+  }
+}
+
+function getErrorMessage(error: unknown) {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+  return "Operazione non riuscita.";
+}
+
+function isConnectionFailure(error: unknown) {
+  if (error instanceof TypeError) return true;
+  if (typeof error !== "object" || error === null) return true;
+
+  const code = "code" in error ? String(error.code ?? "") : "";
+  const message = getErrorMessage(error).toLowerCase();
+  return (
+    !code &&
+    (message.includes("fetch") ||
+      message.includes("network") ||
+      message.includes("timeout") ||
+      message.includes("connection") ||
+      message.includes("raggiung"))
+  );
+}
+
+function isWithinMinutes(value: string | null, minutes: number) {
+  if (!value) return false;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) && Date.now() - timestamp <= minutes * 60_000;
 }

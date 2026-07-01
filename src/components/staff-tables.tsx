@@ -2,12 +2,14 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useConnection } from "@/components/connection-provider";
 import { ACTIVE_ORDER_STATUSES, ORDER_STATUS_LABELS } from "@/lib/constants";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import type { Order, Profile, RestaurantTable } from "@/types/domain";
 
 export function StaffTables() {
+  const { markUnreliable } = useConnection();
   const [tables, setTables] = useState<RestaurantTable[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
@@ -21,6 +23,12 @@ export function StaffTables() {
       supabase.from("orders").select("*").in("status", [...ACTIVE_ORDER_STATUSES]),
       supabase.from("profiles").select("id, full_name, role, active").eq("active", true),
     ]);
+    const error = tablesResult.error ?? ordersResult.error ?? profilesResult.error;
+    if (error) {
+      if (!error.code) markUnreliable();
+      setLoading(false);
+      return;
+    }
 
     setTables((tablesResult.data ?? []) as RestaurantTable[]);
     setOrders((ordersResult.data ?? []) as Order[]);
@@ -30,7 +38,7 @@ export function StaffTables() {
       ),
     );
     setLoading(false);
-  }, []);
+  }, [markUnreliable]);
 
   useEffect(() => {
     queueMicrotask(() => void load());

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useConnection } from "@/components/connection-provider";
 import { formatCurrency } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import type {
@@ -15,6 +16,7 @@ import type {
 type Tab = "menu" | "extras" | "tables" | "settings";
 
 export function AdminDashboard() {
+  const { canWrite, blockReason, markUnreliable } = useConnection();
   const [tab, setTab] = useState<Tab>("menu");
   const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [items, setItems] = useState<MenuItem[]>([]);
@@ -33,13 +35,24 @@ export function AdminDashboard() {
       supabase.from("restaurant_tables").select("*").order("table_number"),
       supabase.from("restaurant_settings").select("*").limit(1).maybeSingle(),
     ]);
+    const error =
+      categoryResult.error ??
+      itemResult.error ??
+      extraResult.error ??
+      tableResult.error ??
+      settingsResult.error;
+    if (error) {
+      if (!error.code) markUnreliable();
+      setLoading(false);
+      return;
+    }
     setCategories((categoryResult.data ?? []) as MenuCategory[]);
     setItems((itemResult.data ?? []) as MenuItem[]);
     setExtras((extraResult.data ?? []) as MenuExtra[]);
     setTables((tableResult.data ?? []) as RestaurantTable[]);
     setSettings(settingsResult.data as RestaurantSettings | null);
     setLoading(false);
-  }, []);
+  }, [markUnreliable]);
 
   useEffect(() => {
     queueMicrotask(() => void load());
@@ -53,6 +66,11 @@ export function AdminDashboard() {
         <div><p className="eyebrow">Configurazione</p><h1>Amministrazione</h1><p>Le modifiche al menu vengono pubblicate in tempo reale.</p></div>
       </section>
       {message && <button className="external-update" onClick={() => setMessage("")}>{message} · Chiudi</button>}
+      {!canWrite && (
+        <p className="connection-action-hint" role="status">
+          {blockReason} Le configurazioni restano consultabili, ma non modificabili.
+        </p>
+      )}
       <nav className="admin-tabs">
         {([
           ["menu", "Menu"],
@@ -64,6 +82,7 @@ export function AdminDashboard() {
         ))}
       </nav>
 
+      <fieldset className="admin-write-scope" disabled={!canWrite}>
       {tab === "menu" && (
         <div className="admin-grid">
           <section className="admin-panel">
@@ -183,11 +202,22 @@ export function AdminDashboard() {
           <button className="button button-primary">Salva impostazioni</button>
         </form>
       )}
+      </fieldset>
     </>
   );
 
   async function execute(task: () => Promise<{ error: { message: string } | null }>) {
+    if (!canWrite) {
+      setMessage(blockReason ?? "Connessione non verificata. Modifica non eseguita.");
+      return;
+    }
     const { error } = await task();
+    if (
+      error &&
+      (!("code" in error) || !String((error as { code?: string }).code ?? ""))
+    ) {
+      markUnreliable();
+    }
     setMessage(error ? error.message : "Modifica salvata");
     if (!error) await load();
   }
@@ -271,13 +301,21 @@ export function AdminDashboard() {
   }
 
   async function moveCategory(category: MenuCategory, delta: number) {
+    if (!canWrite) {
+      setMessage(blockReason ?? "Connessione non verificata. Modifica non eseguita.");
+      return;
+    }
     const currentIndex = categories.findIndex((entry) => entry.id === category.id);
     const other = categories[currentIndex + delta];
     if (!other) return;
     const supabase = createClient();
     const first = await supabase.from("menu_categories").update({ sort_order: other.sort_order }).eq("id", category.id);
-    if (first.error) return setMessage(first.error.message);
+    if (first.error) {
+      if (!first.error.code) markUnreliable();
+      return setMessage(first.error.message);
+    }
     const second = await supabase.from("menu_categories").update({ sort_order: category.sort_order }).eq("id", other.id);
+    if (second.error && !second.error.code) markUnreliable();
     setMessage(second.error ? second.error.message : "Ordine categorie aggiornato");
     if (!second.error) await load();
   }

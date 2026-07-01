@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useConnection } from "@/components/connection-provider";
 import { PrintTicket } from "@/components/print-ticket";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
@@ -15,8 +16,8 @@ import type {
 
 const ACTIVE = ["draft", "pending_cashier", "confirmed", "in_preparation", "bill_requested"];
 const JOB_LABELS: Record<PrintJobType, string> = {
-  new_order: "NUOVO ORDINE",
-  order_update: "AGGIORNAMENTO",
+  new_order: "NUOVA COMANDA",
+  order_update: "AGGIORNAMENTO COMANDA",
   cancellation: "ANNULLAMENTO",
   reprint: "RISTAMPA",
 };
@@ -39,6 +40,7 @@ interface SelectedTicket {
 }
 
 export function CashierDashboard() {
+  const { canWrite, blockReason, markUnreliable } = useConnection();
   const [orders, setOrders] = useState<Order[]>([]);
   const [jobs, setJobs] = useState<PrintJob[]>([]);
   const [filter, setFilter] = useState("");
@@ -57,9 +59,19 @@ export function CashierDashboard() {
       supabase
         .from("print_jobs")
         .select("*")
-        .in("status", ["pending", "printing", "failed"])
-        .order("created_at", { ascending: false }),
+        .order("created_at", { ascending: false })
+        .limit(200),
     ]);
+    const firstError =
+      activeOrdersResult.error ??
+      tablesResult.error ??
+      profilesResult.error ??
+      jobsResult.error;
+    if (firstError) {
+      if (!firstError.code) markUnreliable();
+      setLoading(false);
+      return;
+    }
 
     const rawJobs = (jobsResult.data ?? []) as PrintJob[];
     const activeOrders = (activeOrdersResult.data ?? []) as Order[];
@@ -67,7 +79,12 @@ export function CashierDashboard() {
     const missingIds = [...new Set(rawJobs.map((job) => job.order_id).filter((id) => !activeIds.has(id)))];
     const queuedOrdersResult = missingIds.length
       ? await supabase.from("orders").select("*").in("id", missingIds)
-      : { data: [] };
+      : { data: [], error: null };
+    if (queuedOrdersResult.error) {
+      if (!queuedOrdersResult.error.code) markUnreliable();
+      setLoading(false);
+      return;
+    }
     const rawOrders = [
       ...activeOrders,
       ...((queuedOrdersResult.data ?? []) as Order[]).filter((order) => !activeIds.has(order.id)),
@@ -79,7 +96,12 @@ export function CashierDashboard() {
           .select("*, extras:order_item_extras(*)")
           .in("order_id", orderIds)
           .order("created_at")
-      : { data: [] };
+      : { data: [], error: null };
+    if (linesResult.error) {
+      if (!linesResult.error.code) markUnreliable();
+      setLoading(false);
+      return;
+    }
     const tables = new Map(
       ((tablesResult.data ?? []) as RestaurantTable[]).map((table) => [table.id, table]),
     );
@@ -98,7 +120,7 @@ export function CashierDashboard() {
     );
     setJobs(rawJobs);
     setLoading(false);
-  }, []);
+  }, [markUnreliable]);
 
   const refreshPrinter = useCallback(async () => {
     try {
@@ -107,6 +129,7 @@ export function CashierDashboard() {
       if (!response.ok) throw new Error(payload.error ?? "Stato stampante non disponibile");
       setPrinter(payload);
     } catch (error) {
+      if (error instanceof TypeError) markUnreliable();
       setPrinter({
         configured: true,
         available: false,
@@ -114,7 +137,7 @@ export function CashierDashboard() {
         message: error instanceof Error ? error.message : "PrintNode non raggiungibile",
       });
     }
-  }, []);
+  }, [markUnreliable]);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -178,6 +201,9 @@ export function CashierDashboard() {
       order.status === "in_preparation" ||
       jobFor(order.id, "new_order")?.status === "printed",
   );
+  const queuedJobs = jobs.filter((job) =>
+    ["pending", "printing", "failed"].includes(job.status),
+  );
 
   if (loading) return <div className="loader" aria-label="Caricamento cassa" />;
 
@@ -223,6 +249,11 @@ export function CashierDashboard() {
           {message} · Chiudi
         </button>
       )}
+      {!canWrite && (
+        <p className="connection-action-hint" role="status">
+          {blockReason} Le azioni di cassa e stampa restano disabilitate.
+        </p>
+      )}
 
       <section className="print-queue">
         <div className="print-queue-heading">
@@ -230,25 +261,31 @@ export function CashierDashboard() {
             <p className="eyebrow">Print jobs</p>
             <h2>Coda stampa</h2>
           </div>
-          <span>{jobs.length} job in coda</span>
+          <span>{queuedJobs.length} job in coda</span>
         </div>
         <div className="print-job-list">
-          {jobs.length ? jobs.map((job) => {
+          {queuedJobs.length ? queuedJobs.map((job) => {
             const order = orderById.get(job.order_id);
+            const recoverable =
+              job.status === "failed" ||
+              (job.status === "pending" && isOlderThan(job.created_at, 30_000));
             return (
               <article className={`print-job-row status-${job.status}`} key={job.id}>
                 <div>
                   <strong>{JOB_LABELS[job.job_type]} · #{order?.order_number ?? "—"}</strong>
                   <p>
-                    Tavolo {order?.table?.table_number ?? "—"} · 3 copie · {job.status}
+                    Tavolo {order?.table?.table_number ?? "—"} · 3 copie · {printStatusLabel(job)}
                     {job.printnode_job_id ? ` · PrintNode #${job.printnode_job_id}` : ""}
                   </p>
                   {job.error_message && <small>{job.error_message}</small>}
                 </div>
                 <div className="print-job-actions">
-                  {job.status !== "printing" && order && (
-                    <button onClick={() => void dispatchPrint(order, job.job_type)}>
-                      {job.status === "failed" ? "Riprova" : "Invia"}
+                  {recoverable && order && (
+                    <button
+                      disabled={!canWrite}
+                      onClick={() => void dispatchPrint(order, job.job_type)}
+                    >
+                      {job.status === "failed" ? "Riprova" : "Recupera stampa"}
                     </button>
                   )}
                   {job.status === "printing" && <button disabled>In invio…</button>}
@@ -256,6 +293,7 @@ export function CashierDashboard() {
                     <button
                       className="button-primary"
                       disabled={
+                        !canWrite ||
                         job.status === "printing" ||
                         (job.status === "pending" && Boolean(printer?.available))
                       }
@@ -273,23 +311,40 @@ export function CashierDashboard() {
 
       <div className="cashier-board">
         <CashierColumn title="Nuove comande" count={newOrders.length}>
-          {newOrders.map((order) => (
-            <OrderCard
-              order={order}
-              key={order.id}
-              actions={
-                <>
-                  <button onClick={() => void run("confirm_order", order)}>Conferma</button>
-                  <button
-                    className="button-primary"
-                    onClick={() => void confirmAndPrint(order)}
-                  >
-                    Conferma e stampa
-                  </button>
-                </>
-              }
-            />
-          ))}
+          {newOrders.map((order) => {
+            const job = jobFor(order.id, "new_order");
+            const recoverable =
+              job?.status === "failed" ||
+              (job?.status === "pending" && isOlderThan(job.created_at, 30_000));
+            return (
+              <OrderCard
+                order={order}
+                key={order.id}
+                printStatus={job ? printStatusLabel(job) : "Stampa in preparazione"}
+                actions={
+                  recoverable && job ? (
+                    <>
+                      <button
+                        disabled={!canWrite}
+                        onClick={() => void dispatchPrint(order, "new_order")}
+                      >
+                        Riprova stampa
+                      </button>
+                      <button
+                        className="button-primary"
+                        disabled={!canWrite}
+                        onClick={() =>
+                          setSelected({ order, type: "new_order", jobId: job.id })
+                        }
+                      >
+                        Fallback manuale
+                      </button>
+                    </>
+                  ) : null
+                }
+              />
+            );
+          })}
         </CashierColumn>
         <CashierColumn title="In attesa di stampa" count={waitingPrint.length}>
           {waitingPrint.map((order) => (
@@ -301,6 +356,7 @@ export function CashierDashboard() {
                   <button onClick={() => openPreview(order, "new_order")}>Apri preview</button>
                   <button
                     className="button-primary"
+                    disabled={!canWrite}
                     onClick={() => void dispatchPrint(order, "new_order")}
                   >
                     Stampa
@@ -317,9 +373,10 @@ export function CashierDashboard() {
               key={order.id}
               actions={
                 <>
-                  <button onClick={() => void dispatchPrint(order, "reprint")}>Ristampa</button>
+                  <button disabled={!canWrite} onClick={() => void dispatchPrint(order, "reprint")}>Ristampa</button>
                   <button
                     className="button-primary"
+                    disabled={!canWrite}
                     onClick={() => void run("close_order", order)}
                   >
                     Chiudi tavolo
@@ -360,21 +417,22 @@ export function CashierDashboard() {
               </p>
             )}
             <div className="ticket-preview print-area">
-              {["COPIA PIZZERIA", "COPIA CUCINA", "COPIA CASSA"].map((label) => (
+              {Array.from({ length: 3 }, (_, index) => (
                 <PrintTicket
                   order={selected.order}
-                  label={`${JOB_LABELS[selected.type]} · ${label}`}
-                  key={label}
+                  label={JOB_LABELS[selected.type]}
+                  key={index}
                 />
               ))}
             </div>
             <div className="modal-actions">
-              <button className="button button-secondary" onClick={() => window.print()}>
+              <button className="button button-secondary" disabled={!canWrite} onClick={() => window.print()}>
                 Stampa dal browser
               </button>
               {selected.jobId && jobFor(selected.order.id, selected.type)?.status !== "printing" && (
                 <button
                   className="button button-primary"
+                  disabled={!canWrite}
                   onClick={() => void completeManualFallback(selected.jobId!)}
                 >
                   Segna fallback completato
@@ -383,6 +441,7 @@ export function CashierDashboard() {
               {!["closed", "cancelled"].includes(selected.order.status) && (
                 <button
                   className="button button-danger"
+                  disabled={!canWrite}
                   onClick={() => void cancelAndPrint(selected.order)}
                 >
                   Annulla ordine
@@ -400,8 +459,10 @@ export function CashierDashboard() {
   }
 
   async function run(name: "confirm_order" | "close_order", order: Order) {
+    if (!canWrite) return false;
     const { error } = await createClient().rpc(name, { p_order_id: order.id });
     if (error) {
+      if (!error.code) markUnreliable();
       setMessage(error.message);
       return false;
     }
@@ -410,15 +471,11 @@ export function CashierDashboard() {
     return true;
   }
 
-  async function confirmAndPrint(order: Order) {
-    if (await run("confirm_order", order)) {
-      await dispatchPrint(order, "new_order");
-    }
-  }
-
   async function cancelAndPrint(order: Order) {
+    if (!canWrite) return;
     const { error } = await createClient().rpc("cancel_order", { p_order_id: order.id });
     if (error) {
+      if (!error.code) markUnreliable();
       setMessage(error.message);
       return;
     }
@@ -428,36 +485,44 @@ export function CashierDashboard() {
   }
 
   async function dispatchPrint(order: Order, type: PrintJobType) {
-    const response = await fetch("/api/print-order", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ orderId: order.id, type }),
-    });
-    const payload = (await response.json()) as {
-      error?: string;
-      idempotent?: boolean;
-      fallback?: "manual";
-    };
+    if (!canWrite) return;
+    try {
+      const response = await fetch("/api/print-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: order.id, type }),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        idempotent?: boolean;
+        fallback?: "manual";
+      };
 
-    if (!response.ok) {
-      setMessage(`${payload.error ?? "Stampa non riuscita"} · usa il fallback manuale`);
-      openPreview(order, type);
-    } else {
-      setMessage(
-        payload.idempotent
-          ? `${JOB_LABELS[type]} già presa in carico`
-          : `${JOB_LABELS[type]} inviata a PrintNode`,
-      );
+      if (!response.ok) {
+        setMessage(`${payload.error ?? "Stampa non riuscita"} · usa il fallback manuale`);
+        openPreview(order, type);
+      } else {
+        setMessage(
+          payload.idempotent
+            ? `${JOB_LABELS[type]} già presa in carico`
+            : `${JOB_LABELS[type]} inviata a PrintNode`,
+        );
+      }
+    } catch {
+      markUnreliable();
+      setMessage("Connessione non affidabile. Stampa non confermata.");
     }
     await load();
     await refreshPrinter();
   }
 
   async function completeManualFallback(jobId: string) {
+    if (!canWrite) return;
     const { error } = await createClient().rpc("mark_print_job_manual", {
       p_job_id: jobId,
     });
     if (error) {
+      if (!error.code) markUnreliable();
       setMessage(error.message);
       return;
     }
@@ -486,7 +551,15 @@ function CashierColumn({
   );
 }
 
-function OrderCard({ order, actions }: { order: Order; actions: React.ReactNode }) {
+function OrderCard({
+  order,
+  actions,
+  printStatus,
+}: {
+  order: Order;
+  actions: React.ReactNode;
+  printStatus?: string;
+}) {
   return (
     <article className="cashier-card">
       <header>
@@ -499,6 +572,7 @@ function OrderCard({ order, actions }: { order: Order; actions: React.ReactNode 
       <p className="card-meta">
         {order.cover_count} coperti · {order.waiter?.full_name ?? "Staff"}
       </p>
+      {printStatus && <p className="card-print-status">{printStatus}</p>}
       <ul>
         {order.items?.map((item) => (
           <li key={item.id}>
@@ -517,4 +591,25 @@ function OrderCard({ order, actions }: { order: Order; actions: React.ReactNode 
       <div className="card-actions">{actions}</div>
     </article>
   );
+}
+
+function isOlderThan(value: string, milliseconds: number) {
+  return Date.now() - new Date(value).getTime() > milliseconds;
+}
+
+function printStatusLabel(job: PrintJob) {
+  if (job.status === "printed") return "Nuova comanda — stampata";
+  if (job.status === "failed") return "Nuova comanda — ERRORE STAMPA · DA STAMPARE";
+  if (
+    job.status === "printing" &&
+    job.error_message?.toLowerCase().includes("incerto")
+  ) {
+    return "Nuova comanda — esito stampa incerto";
+  }
+  if (job.status === "printing") return "Nuova comanda — in stampa";
+  if (job.status === "pending" && isOlderThan(job.created_at, 30_000)) {
+    return "Nuova comanda — errore avvio stampa";
+  }
+  if (job.status === "pending") return "Nuova comanda — stampa avviata";
+  return "Nuova comanda — stampa annullata";
 }
