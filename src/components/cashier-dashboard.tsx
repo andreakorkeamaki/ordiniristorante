@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useConnection } from "@/components/connection-provider";
 import { PrintTicket } from "@/components/print-ticket";
+import { ServiceControl } from "@/components/service-control";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentService } from "@/hooks/use-current-service";
 import type {
   Order,
   OrderItem,
@@ -41,6 +43,12 @@ interface SelectedTicket {
 
 export function CashierDashboard() {
   const { canWrite, blockReason, markUnreliable } = useConnection();
+  const {
+    service,
+    loading: serviceLoading,
+    error: serviceError,
+    reload: reloadService,
+  } = useCurrentService();
   const [orders, setOrders] = useState<Order[]>([]);
   const [jobs, setJobs] = useState<PrintJob[]>([]);
   const [filter, setFilter] = useState("");
@@ -199,6 +207,7 @@ export function CashierDashboard() {
   const preparing = filtered.filter(
     (order) =>
       order.status === "in_preparation" ||
+      order.status === "bill_requested" ||
       jobFor(order.id, "new_order")?.status === "printed",
   );
   const queuedJobs = jobs.filter((job) =>
@@ -229,6 +238,16 @@ export function CashierDashboard() {
           </select>
         </div>
       </section>
+
+      <ServiceControl
+        service={service}
+        serviceLoading={serviceLoading}
+        serviceError={serviceError}
+        activeOrderCount={activeOrders.length}
+        onChanged={async () => {
+          await Promise.all([reloadService(), load()]);
+        }}
+      />
 
       <section
         className={`printer-status ${printer?.available ? "is-online" : "is-offline"}`}
@@ -366,7 +385,7 @@ export function CashierDashboard() {
             />
           ))}
         </CashierColumn>
-        <CashierColumn title="Stampate / lavorazione" count={preparing.length}>
+        <CashierColumn title="Lavorazione / conto" count={preparing.length}>
           {preparing.map((order) => (
             <OrderCard
               order={order}

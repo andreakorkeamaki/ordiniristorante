@@ -9,7 +9,9 @@ import {
   getOrderSubmissionIssue,
   validateAllYouCanEat,
 } from "@/lib/order-calculations";
+import { formatServiceLabel, isPreviousService } from "@/lib/service-management";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentService } from "@/hooks/use-current-service";
 import type {
   MenuCategory,
   MenuExtra,
@@ -24,6 +26,7 @@ type MutationTask = () => Promise<void>;
 
 export function TableOrder({ tableId, profile }: { tableId: string; profile: Profile }) {
   const { status, canWrite, blockReason, markUnreliable } = useConnection();
+  const { service, loading: serviceLoading } = useCurrentService();
   const [table, setTable] = useState<RestaurantTable | null>(null);
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
@@ -39,6 +42,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
   const [loading, setLoading] = useState(true);
   const selfUpdate = useRef(false);
   const initialLoadStarted = useRef(false);
+  const baseLoaded = useRef(false);
   const loadedSuccessfully = useRef(false);
   const wasBlocked = useRef(false);
 
@@ -75,6 +79,8 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       }
 
       if (!currentOrder) {
+        setOrder(null);
+        setItems([]);
         setLoading(false);
         return;
       }
@@ -123,14 +129,18 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
     setExtras((extraResult.data ?? []) as MenuExtra[]);
     setActiveCategory((current) => current || loadedCategories[0]?.id || "");
     await loadOrder(createOrder);
+    baseLoaded.current = true;
   }, [loadOrder, markUnreliable, tableId]);
 
   const mutate = useCallback(
     async (task: MutationTask) => {
-      if (!canWrite) {
+      const serviceAvailable = Boolean(service && !isPreviousService(service));
+      if (!canWrite || !serviceAvailable) {
         setSaving("error");
         setMutationError(
-          blockReason ?? "Connessione non verificata. Operazione non eseguita.",
+          !canWrite
+            ? blockReason ?? "Connessione non verificata. Operazione non eseguita."
+            : "Il servizio non è aperto o appartiene a un giorno precedente.",
         );
         return;
       }
@@ -152,14 +162,36 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
         }, 500);
       }
     },
-    [blockReason, canWrite, loadOrder, markUnreliable],
+    [blockReason, canWrite, loadOrder, markUnreliable, service],
   );
 
   useEffect(() => {
-    if (status === "checking" || initialLoadStarted.current) return;
+    if (
+      status === "checking" ||
+      serviceLoading ||
+      initialLoadStarted.current
+    ) {
+      return;
+    }
     initialLoadStarted.current = true;
-    queueMicrotask(() => void loadBase(canWrite));
-  }, [canWrite, loadBase, status]);
+    queueMicrotask(() =>
+      void loadBase(Boolean(canWrite && service && !isPreviousService(service))),
+    );
+  }, [canWrite, loadBase, service, serviceLoading, status]);
+
+  useEffect(() => {
+    if (
+      !initialLoadStarted.current ||
+      !baseLoaded.current ||
+      !canWrite ||
+      !service ||
+      isPreviousService(service) ||
+      order
+    ) {
+      return;
+    }
+    queueMicrotask(() => void loadOrder(true));
+  }, [canWrite, loadOrder, order, service]);
 
   useEffect(() => {
     if (status !== "online") {
@@ -235,29 +267,49 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
     });
   }, [activeCategory, menuItems, search]);
 
-  if (loading || status === "checking") {
+  if (loading || status === "checking" || serviceLoading) {
     return <div className="loader" aria-label="Caricamento comanda" />;
   }
   if (!table || !order) {
+    const serviceMessage = !service
+      ? "La cassa deve iniziare pranzo o cena prima di aprire il tavolo."
+      : isPreviousService(service)
+        ? "Il servizio precedente deve essere chiuso dalla cassa prima di creare nuove comande."
+        : null;
     return (
       <section className="empty-card">
-        <h1>{canWrite ? "Tavolo non disponibile" : "Comanda non disponibile offline"}</h1>
-        {!canWrite && <p>{blockReason}</p>}
+        <h1>
+          {serviceMessage
+            ? "Nessun servizio operativo"
+            : canWrite
+              ? "Tavolo non disponibile"
+              : "Comanda non disponibile offline"}
+        </h1>
+        <p>{serviceMessage ?? (!canWrite ? blockReason : null)}</p>
         <Link className="button button-primary" href="/staff/tables">Torna ai tavoli</Link>
       </section>
     );
   }
 
+  const serviceOperational = Boolean(service && !isPreviousService(service));
+  const operationsEnabled = canWrite && serviceOperational;
+  const operationalBlockReason = !canWrite
+    ? blockReason
+    : !service
+      ? "Nessun servizio aperto."
+      : !serviceOperational
+        ? "Il servizio precedente deve essere chiuso dalla cassa."
+        : null;
   const editable = order.status === "draft" || profile.role !== "waiter";
-  const writeEnabled = editable && canWrite;
+  const writeEnabled = editable && operationsEnabled;
   const canVerifySubmission =
     profile.role === "waiter" &&
     order.status === "pending_cashier" &&
     isWithinMinutes(order.sent_to_cashier_at, 15);
   const ayce = validateAllYouCanEat(items, order.cover_count);
   const submissionIssue =
-    !canWrite && order.status === "draft"
-      ? blockReason
+    !operationsEnabled && order.status === "draft"
+      ? operationalBlockReason
       : getOrderSubmissionIssue({
           status: order.status,
           itemCount: items.length,
@@ -273,10 +325,13 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
           <Link className="back-link" href="/staff/tables">← Tutti i tavoli</Link>
           <p className="eyebrow">Comanda #{order.order_number}</p>
           <h1>Tavolo {table.table_number}</h1>
+          {service && (
+            <p className="service-context">{formatServiceLabel(service)}</p>
+          )}
         </div>
         <div className="order-live-status">
           <span className={`save-state save-${saving}`}>
-            {!canWrite
+            {!operationsEnabled
               ? "Modifiche bloccate"
               : saving === "saved"
                 ? "Salvato"
@@ -301,10 +356,9 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
           {mutationError} · Chiudi
         </button>
       )}
-      {!canWrite && (
+      {!operationsEnabled && (
         <p className="connection-action-hint" role="status">
-          {blockReason} I comandi di modifica restano disabilitati finché il server non
-          viene verificato.
+          {operationalBlockReason} I comandi di modifica restano disabilitati.
         </p>
       )}
 
@@ -332,7 +386,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
               <button
                 className="product-button"
                 disabled={!writeEnabled || !item.available}
-                title={!canWrite ? blockReason ?? undefined : undefined}
+                title={!operationsEnabled ? operationalBlockReason ?? undefined : undefined}
                 key={item.id}
                 onClick={() =>
                   void mutate(async () => {
@@ -411,7 +465,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
                   <select
                     className="extra-select"
                     defaultValue=""
-                    disabled={!canWrite}
+                    disabled={!operationsEnabled}
                     onChange={(event) => {
                       const extraId = event.target.value;
                       event.target.value = "";
@@ -463,7 +517,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
           className="button button-primary button-large"
           aria-describedby={submissionIssue ? "order-send-hint" : undefined}
           disabled={
-            !canWrite ||
+            !operationsEnabled ||
             (order.status === "draft" ? submissionIssue !== null : !canVerifySubmission)
           }
           onClick={() => void submitOrder()}
@@ -529,10 +583,10 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
   }
 
   async function submitOrder() {
-    if (!canWrite) {
+    if (!operationsEnabled) {
       setSaving("error");
       setMutationError(
-        blockReason ?? "Connessione non verificata. Comanda non inviata.",
+        operationalBlockReason ?? "Comanda non inviata.",
       );
       return;
     }

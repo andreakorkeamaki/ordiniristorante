@@ -901,6 +901,39 @@ code {
   gap: 0.9rem;
 }
 
+.staff-service-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line);
+  border-left: 0.3rem solid var(--muted);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.staff-service-status.is-open {
+  border-left-color: var(--green);
+  background: #edf8ef;
+}
+
+.staff-service-status.is-previous {
+  border-left-color: var(--amber);
+  background: #fff3dd;
+}
+
+.staff-service-status span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.table-card.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .table-card {
   display: flex;
   min-height: 11.5rem;
@@ -979,6 +1012,13 @@ code {
 .order-heading {
   align-items: flex-end;
   margin-bottom: 0.75rem;
+}
+
+.service-context {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .back-link {
@@ -1358,6 +1398,75 @@ code {
 /* Cashier */
 .cashier-heading {
   align-items: center;
+}
+
+.service-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-left: 0.35rem solid var(--muted);
+  border-radius: 0.85rem;
+  background: var(--surface);
+}
+
+.service-control.is-open {
+  border-left-color: var(--green);
+  background: #edf8ef;
+}
+
+.service-control.is-previous {
+  border-left-color: var(--amber);
+  background: #fff3dd;
+}
+
+.service-control h2,
+.service-control p {
+  margin: 0;
+}
+
+.service-control h2 {
+  margin-top: 0.15rem;
+  font-size: 1.1rem;
+}
+
+.service-control > div > p:not(.eyebrow) {
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.service-warning,
+.service-error {
+  display: block;
+  margin-top: 0.5rem;
+  color: #7c241e;
+  font-size: 0.76rem;
+}
+
+.service-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.5rem;
+}
+
+.service-close-modal {
+  width: min(100%, 32rem);
+  padding: 1.25rem;
+  border-radius: 1rem;
+  background: var(--paper);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 30%);
+}
+
+.service-close-modal h2 {
+  margin: 0.2rem 0 0.75rem;
+}
+
+.service-close-modal p {
+  color: var(--muted);
 }
 
 .cashier-filters {
@@ -2219,6 +2328,26 @@ code {
   .cashier-filters {
     display: grid;
     grid-template-columns: 1fr 1fr;
+  }
+
+  .service-control,
+  .staff-service-status {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .service-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .service-actions:has(> :only-child) {
+    grid-template-columns: 1fr;
+  }
+
+  .service-actions .button {
+    width: 100%;
   }
 
   .printer-status,

@@ -6,6 +6,7 @@ const order: Order = {
   id: "00000000-0000-4000-8000-000000000001",
   order_number: 42,
   table_id: "00000000-0000-4000-8000-000000000002",
+  service_id: "00000000-0000-4000-8000-000000000004",
   status: "confirmed",
   cover_count: 2,
   cover_price_snapshot: 1.9,
