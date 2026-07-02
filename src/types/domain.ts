@@ -10,6 +10,7 @@ export type OrderStatus =
 export type PrintStatus = "pending" | "printing" | "printed" | "failed" | "cancelled";
 export type PrintJobType = "new_order" | "order_update" | "cancellation" | "reprint";
 export type PreparationArea = "pizzeria" | "cucina" | "bar" | "cassa";
+export type ServicePeriod = "pranzo" | "cena" | "recupero";
 
 export interface Profile {
   id: string;
@@ -76,6 +77,18 @@ export interface RestaurantTable {
   active: boolean;
 }
 
+export interface RestaurantService {
+  id: string;
+  business_date: string;
+  period: ServicePeriod;
+  opened_by: string;
+  closed_by: string | null;
+  opened_at: string;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface OrderItemExtra {
   id: string;
   order_item_id: string;
@@ -104,6 +117,7 @@ export interface Order {
   id: string;
   order_number: number;
   table_id: string;
+  service_id: string | null;
   status: OrderStatus;
   cover_count: number;
   cover_price_snapshot: number;
