@@ -617,18 +617,19 @@ function isOlderThan(value: string, milliseconds: number) {
 }
 
 function printStatusLabel(job: PrintJob) {
-  if (job.status === "printed") return "Nuova comanda — stampata";
-  if (job.status === "failed") return "Nuova comanda — ERRORE STAMPA · DA STAMPARE";
+  const label = JOB_LABELS[job.job_type];
+  if (job.status === "printed") return `${label} — stampata`;
+  if (job.status === "failed") return `${label} — ERRORE STAMPA · DA STAMPARE`;
   if (
     job.status === "printing" &&
     job.error_message?.toLowerCase().includes("incerto")
   ) {
-    return "Nuova comanda — esito stampa incerto";
+    return `${label} — esito stampa incerto`;
   }
-  if (job.status === "printing") return "Nuova comanda — in stampa";
+  if (job.status === "printing") return `${label} — in stampa`;
   if (job.status === "pending" && isOlderThan(job.created_at, 30_000)) {
-    return "Nuova comanda — errore avvio stampa";
+    return `${label} — errore avvio stampa`;
   }
-  if (job.status === "pending") return "Nuova comanda — stampa avviata";
-  return "Nuova comanda — stampa annullata";
+  if (job.status === "pending") return `${label} — stampa avviata`;
+  return `${label} — stampa annullata`;
 }

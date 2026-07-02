@@ -11,6 +11,10 @@ import {
   validateAllYouCanEat,
 } from "@/lib/order-calculations";
 import { shouldFlagExternalOrderUpdate } from "@/lib/order-realtime";
+import {
+  canEditOrder,
+  canSendOrderUpdate,
+} from "@/lib/order-workflow";
 import { formatServiceLabel, isPreviousService } from "@/lib/service-management";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentService } from "@/hooks/use-current-service";
@@ -20,6 +24,9 @@ import type {
   MenuItem,
   Order,
   OrderItem,
+  OrderStatus,
+  PrintJobType,
+  PrintStatus,
   Profile,
   RestaurantTable,
 } from "@/types/domain";
@@ -41,6 +48,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
   const [mutationError, setMutationError] = useState("");
   const [presence, setPresence] = useState<string[]>([]);
   const [externalUpdate, setExternalUpdate] = useState(false);
+  const [updatePrintStatus, setUpdatePrintStatus] = useState<PrintStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const selfUpdate = useRef(false);
   const initialLoadStarted = useRef(false);
@@ -83,23 +91,38 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       if (!currentOrder) {
         setOrder(null);
         setItems([]);
+        setUpdatePrintStatus(null);
         setLoading(false);
         return;
       }
 
-      const { data: lines, error: linesError } = await supabase
-        .from("order_items")
-        .select("*, extras:order_item_extras(*)")
-        .eq("order_id", currentOrder.id)
-        .order("created_at");
-      if (linesError) {
+      const [linesResult, updateJobResult] = await Promise.all([
+        supabase
+          .from("order_items")
+          .select("*, extras:order_item_extras(*)")
+          .eq("order_id", currentOrder.id)
+          .order("created_at"),
+        supabase
+          .from("print_jobs")
+          .select("status")
+          .eq("order_id", currentOrder.id)
+          .eq("job_type", "order_update")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
+      const loadError = linesResult.error ?? updateJobResult.error;
+      if (loadError) {
         setSaving("error");
-        if (isConnectionFailure(linesError)) markUnreliable();
+        if (isConnectionFailure(loadError)) markUnreliable();
         setLoading(false);
         return;
       }
       setOrder(currentOrder);
-      setItems((lines ?? []) as OrderItem[]);
+      setItems((linesResult.data ?? []) as OrderItem[]);
+      setUpdatePrintStatus(
+        (updateJobResult.data?.status as PrintStatus | undefined) ?? null,
+      );
       setSaving("saved");
       loadedSuccessfully.current = true;
       setLoading(false);
@@ -249,6 +272,11 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
           void loadOrder();
         },
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "print_jobs", filter: `order_id=eq.${orderId}` },
+        () => void loadOrder(),
+      )
       .subscribe();
 
     const room = supabase.channel(`table:${tableId}`, {
@@ -320,7 +348,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       : !serviceOperational
         ? "Il servizio precedente deve essere chiuso dalla cassa."
         : null;
-  const editable = order.status === "draft" || profile.role !== "waiter";
+  const editable = canEditOrder(order.status);
   const writeEnabled = editable && operationsEnabled;
   const canVerifySubmission =
     profile.role === "waiter" &&
@@ -337,6 +365,16 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
           saving,
           allYouCanEat: ayce,
         });
+  const updateReady =
+    canSendOrderUpdate(order.status) && updatePrintStatus === "pending";
+  const submissionType: Extract<PrintJobType, "new_order" | "order_update"> | null =
+    order.status === "draft"
+      ? "new_order"
+      : updateReady
+        ? "order_update"
+        : canVerifySubmission
+          ? "new_order"
+          : null;
 
   return (
     <>
@@ -538,15 +576,17 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
           aria-describedby={submissionIssue ? "order-send-hint" : undefined}
           disabled={
             !operationsEnabled ||
-            (order.status === "draft" ? submissionIssue !== null : !canVerifySubmission)
+            (order.status === "draft" ? submissionIssue !== null : !submissionType)
           }
-          onClick={() => void submitOrder()}
+          onClick={() => {
+            if (submissionType) void submitOrder(submissionType);
+          }}
         >
-          {order.status === "draft"
-            ? "Invia alla cassa"
-            : canVerifySubmission
-              ? "Verifica invio e stampa"
-              : "Comanda inviata"}
+          {getSubmissionLabel({
+            orderStatus: order.status,
+            updatePrintStatus,
+            canVerifySubmission,
+          })}
         </button>
       </div>
     </>
@@ -602,7 +642,9 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
     });
   }
 
-  async function submitOrder() {
+  async function submitOrder(
+    type: Extract<PrintJobType, "new_order" | "order_update">,
+  ) {
     if (!operationsEnabled) {
       setSaving("error");
       setMutationError(
@@ -619,7 +661,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       const response = await fetch("/api/print-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderId: order!.id, type: "new_order" }),
+        body: JSON.stringify({ orderId: order!.id, type }),
       });
       const payload = (await response.json()) as {
         error?: string;
@@ -629,16 +671,25 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
 
       if (!response.ok && !payload.orderAccepted) {
         setSaving("error");
-        setMutationError(payload.error ?? "Invio della comanda non riuscito");
+        setMutationError(
+          payload.error ??
+            (type === "order_update"
+              ? "Invio dell'aggiornamento non riuscito"
+              : "Invio della comanda non riuscito"),
+        );
         return;
       }
 
       await loadOrder();
       if (!response.ok) {
+        const acceptedLabel =
+          type === "order_update"
+            ? "Aggiornamento registrato"
+            : "Comanda arrivata in cassa";
         setMutationError(
           payload.outcome === "uncertain"
-            ? "Comanda arrivata in cassa. Esito stampa incerto: la cassa deve verificare la stampante."
-            : `Comanda arrivata in cassa, ma la stampa è fallita: ${payload.error ?? "interviene la cassa"}.`,
+            ? `${acceptedLabel}. Esito stampa incerto: la cassa deve verificare la stampante.`
+            : `${acceptedLabel}, ma la stampa è fallita: ${payload.error ?? "interviene la cassa"}.`,
         );
       }
     } catch {
@@ -681,6 +732,23 @@ function isConnectionFailure(error: unknown) {
       message.includes("connection") ||
       message.includes("raggiung"))
   );
+}
+
+function getSubmissionLabel({
+  orderStatus,
+  updatePrintStatus,
+  canVerifySubmission,
+}: {
+  orderStatus: OrderStatus;
+  updatePrintStatus: PrintStatus | null;
+  canVerifySubmission: boolean;
+}) {
+  if (orderStatus === "draft") return "Invia alla cassa";
+  if (updatePrintStatus === "pending") return "Invia aggiornamento";
+  if (updatePrintStatus === "printing") return "Aggiornamento in stampa";
+  if (updatePrintStatus === "failed") return "Stampa da verificare in cassa";
+  if (canVerifySubmission) return "Verifica invio e stampa";
+  return "Comanda aggiornata";
 }
 
 function isWithinMinutes(value: string | null, minutes: number) {
