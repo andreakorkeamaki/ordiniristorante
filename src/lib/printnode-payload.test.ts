@@ -18,4 +18,15 @@ describe("buildPrintNodePayload", () => {
     expect(payload.contentType).toBe("raw_base64");
     expect(Buffer.from(payload.content, "base64")).toEqual(ticket);
   });
+
+  it("permette di chiedere una sola copia per lo scontrino", () => {
+    const payload = buildPrintNodePayload({
+      printerId: 123,
+      title: "SCONTRINO #42",
+      content: Buffer.from("TOTALE 23,80 EUR\n", "ascii"),
+      copies: 1,
+    });
+
+    expect(payload.qty).toBe(1);
+  });
 });

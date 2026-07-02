@@ -129,6 +129,7 @@ export async function createPrintNodeJob(input: {
   title: string;
   content: Buffer;
   idempotencyKey: string;
+  copies?: number;
 }) {
   const config = getConfig();
   if (!config) throw new Error("PrintNode non configurato");
@@ -145,6 +146,7 @@ export async function createPrintNodeJob(input: {
         printerId: config.printerId,
         title: input.title,
         content: input.content,
+        copies: input.copies,
       })),
     });
   } catch (error) {

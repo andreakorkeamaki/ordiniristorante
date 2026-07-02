@@ -56,6 +56,7 @@ export function CashierDashboard() {
   const [selected, setSelected] = useState<SelectedTicket | null>(null);
   const [printer, setPrinter] = useState<PrinterStatus | null>(null);
   const [message, setMessage] = useState("");
+  const [closingOrderId, setClosingOrderId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -395,10 +396,10 @@ export function CashierDashboard() {
                   <button disabled={!canWrite} onClick={() => void dispatchPrint(order, "reprint")}>Ristampa</button>
                   <button
                     className="button-primary"
-                    disabled={!canWrite}
-                    onClick={() => void run("close_order", order)}
+                    disabled={!canWrite || closingOrderId !== null}
+                    onClick={() => void closeTableAndPrint(order)}
                   >
-                    Chiudi tavolo
+                    {closingOrderId === order.id ? "Stampa e chiude…" : "Chiudi tavolo"}
                   </button>
                 </>
               }
@@ -477,17 +478,42 @@ export function CashierDashboard() {
     setSelected({ order, type, jobId: jobFor(order.id, type)?.id });
   }
 
-  async function run(name: "confirm_order" | "close_order", order: Order) {
-    if (!canWrite) return false;
-    const { error } = await createClient().rpc(name, { p_order_id: order.id });
-    if (error) {
-      if (!error.code) markUnreliable();
-      setMessage(error.message);
-      return false;
+  async function closeTableAndPrint(order: Order) {
+    if (!canWrite || closingOrderId) return;
+    setClosingOrderId(order.id);
+
+    try {
+      const response = await fetch("/api/close-table", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: order.id }),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        closed?: boolean;
+        copies?: number;
+        idempotent?: boolean;
+      };
+
+      if (!response.ok || !payload.closed) {
+        setMessage(payload.error ?? "Stampa non riuscita. Tavolo non chiuso");
+        return;
+      }
+
+      setSelected(null);
+      setMessage(
+        payload.idempotent
+          ? "Tavolo già chiuso"
+          : `Scontrino stampato (${payload.copies ?? 1} copia) · tavolo chiuso`,
+      );
+    } catch {
+      markUnreliable();
+      setMessage("Connessione non affidabile: verifica stampa e stato del tavolo");
+    } finally {
+      setClosingOrderId(null);
+      await load();
+      await refreshPrinter();
     }
-    setSelected(null);
-    await load();
-    return true;
   }
 
   async function cancelAndPrint(order: Order) {
