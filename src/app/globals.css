@@ -1602,6 +1602,52 @@ code {
   border-left-color: var(--blue);
 }
 
+.print-job-row.status-verification_required {
+  border-left-color: var(--amber);
+  background: #fff8e9;
+}
+
+.print-job-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.print-status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.45rem;
+  padding: 0.18rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: #fff;
+  font-size: 0.63rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.print-status-badge.status-printing {
+  border-color: #a9bdd5;
+  color: #204f7b;
+  background: #edf5ff;
+}
+
+.print-status-badge.status-failed,
+.print-status-badge.status-verification_required {
+  border-color: #d9a8a2;
+  color: #7c241e;
+  background: #fff1ee;
+}
+
+.print-status-badge.status-printed,
+.print-status-badge.is-manual {
+  border-color: #9ac4a5;
+  color: #245c34;
+  background: #edf8ef;
+}
+
 .print-job-row p,
 .print-job-row small {
   display: block;
@@ -1633,6 +1679,46 @@ code {
   border-color: var(--red);
   color: #fff;
   background: var(--red);
+}
+
+.print-job-actions button.button-warning {
+  border-color: #cf9b45;
+  color: #704516;
+  background: #fff3dd;
+}
+
+.print-job-actions button.button-danger {
+  border-color: #d9a8a2;
+  color: #7a1712;
+  background: #fff2f0;
+}
+
+.historical-print-jobs {
+  margin: -0.25rem 0 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.historical-print-jobs summary {
+  cursor: pointer;
+  padding: 0.75rem 0.9rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.historical-print-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.75rem;
+  padding: 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  color: var(--ink);
+  background: #fff;
+  text-align: left;
+  font-size: 0.72rem;
 }
 
 .cashier-board {
@@ -1816,6 +1902,129 @@ code {
   border-radius: 1rem;
   background: var(--paper);
   box-shadow: 0 20px 60px rgb(0 0 0 / 30%);
+}
+
+.print-confirmation-modal {
+  width: min(100%, 36rem);
+  padding: 1.2rem;
+  border-radius: 1rem;
+  background: var(--paper);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 30%);
+}
+
+.print-confirmation-modal h2 {
+  margin: 0.2rem 0 0.75rem;
+}
+
+.confirmation-warning {
+  padding: 0.8rem;
+  border: 1px solid #d6a24f;
+  border-radius: 0.65rem;
+  color: #704516;
+  background: #fff3dd;
+  line-height: 1.45;
+}
+
+.confirmation-job-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 1rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.confirmation-job-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  background: var(--surface);
+  font-size: 0.75rem;
+}
+
+.confirmation-job-list span {
+  color: var(--muted);
+  text-align: right;
+}
+
+.print-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin: 1rem 0;
+}
+
+.print-details div {
+  padding: 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  background: var(--surface);
+}
+
+.print-details dt {
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.print-details dd {
+  margin: 0.2rem 0 0;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.retry-reason {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 1rem;
+  font-size: 0.75rem;
+  font-weight: 750;
+}
+
+.retry-reason textarea {
+  min-height: 4.5rem;
+  padding: 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  resize: vertical;
+}
+
+.risk-confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  margin: 1rem 0;
+  color: #7a1712;
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.risk-confirmation input {
+  width: 1.1rem;
+  height: 1.1rem;
+  margin-top: 0.05rem;
+}
+
+.print-detail-note,
+.technical-error {
+  margin-top: 0.8rem;
+  padding: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  background: var(--surface);
+  font-size: 0.75rem;
+}
+
+.technical-error code {
+  display: block;
+  margin-top: 0.55rem;
+  overflow-wrap: anywhere;
+  color: #7a1712;
+  white-space: pre-wrap;
 }
 
 .modal-heading h2 {
