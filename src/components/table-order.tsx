@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { useConnection } from "@/components/connection-provider";
 import { QUICK_NOTES, ORDER_STATUS_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/format";
@@ -9,6 +10,7 @@ import {
   getOrderSubmissionIssue,
   validateAllYouCanEat,
 } from "@/lib/order-calculations";
+import { shouldFlagExternalOrderUpdate } from "@/lib/order-realtime";
 import { formatServiceLabel, isPreviousService } from "@/lib/service-management";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentService } from "@/hooks/use-current-service";
@@ -216,16 +218,34 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "orders", filter: `id=eq.${orderId}` },
-        () => {
-          if (!selfUpdate.current) setExternalUpdate(true);
+        (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
+          if (
+            shouldFlagExternalOrderUpdate({
+              profileId: profile.id,
+              selfUpdate: selfUpdate.current,
+              newRow: payload.new,
+              oldRow: payload.old,
+            })
+          ) {
+            setExternalUpdate(true);
+          }
           void loadOrder();
         },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "order_items", filter: `order_id=eq.${orderId}` },
-        () => {
-          if (!selfUpdate.current) setExternalUpdate(true);
+        (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
+          if (
+            shouldFlagExternalOrderUpdate({
+              profileId: profile.id,
+              selfUpdate: selfUpdate.current,
+              newRow: payload.new,
+              oldRow: payload.old,
+            })
+          ) {
+            setExternalUpdate(true);
+          }
           void loadOrder();
         },
       )
