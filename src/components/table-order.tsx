@@ -7,6 +7,7 @@ import { useConnection } from "@/components/connection-provider";
 import { QUICK_NOTES, ORDER_STATUS_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/format";
 import {
+  aggregateMenuItemQuantities,
   getOrderSubmissionIssue,
   validateAllYouCanEat,
 } from "@/lib/order-calculations";
@@ -314,6 +315,10 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       return matchesCategory && matchesSearch;
     });
   }, [activeCategory, menuItems, search]);
+  const menuItemQuantities = useMemo(
+    () => aggregateMenuItemQuantities(items),
+    [items],
+  );
 
   if (loading || status === "checking" || serviceLoading) {
     return <div className="loader" aria-label="Caricamento comanda" />;
@@ -422,6 +427,14 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
 
       <div className="order-layout">
         <section className="product-picker">
+          <div className="covers-row covers-row-menu">
+            <span>Coperti</span>
+            <div className="stepper">
+              <button disabled={!writeEnabled || order.cover_count === 0} onClick={() => void saveDetails(order.cover_count - 1)}>−</button>
+              <strong>{order.cover_count}</strong>
+              <button disabled={!writeEnabled} onClick={() => void saveDetails(order.cover_count + 1)}>+</button>
+            </div>
+          </div>
           <label className="compact-search product-search">
             <span>⌕</span>
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Cerca prodotto" />
@@ -457,6 +470,14 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
                   })
                 }
               >
+                {(menuItemQuantities[item.id] ?? 0) > 0 && (
+                  <span
+                    className="product-quantity-badge"
+                    aria-label={`${menuItemQuantities[item.id]} inseriti`}
+                  >
+                    {menuItemQuantities[item.id]}
+                  </span>
+                )}
                 <span>{item.name}</span>
                 <strong>{item.available ? formatCurrency(item.price) : "Esaurito"}</strong>
                 {item.ingredients && <small>{item.ingredients}</small>}
@@ -469,15 +490,6 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
           <div className="panel-title">
             <div><p className="eyebrow">Ordine</p><h2>Comanda</h2></div>
             <strong>{items.reduce((sum, item) => sum + item.quantity, 0)} prodotti</strong>
-          </div>
-
-          <div className="covers-row">
-            <span>Coperti</span>
-            <div className="stepper">
-              <button disabled={!writeEnabled || order.cover_count === 0} onClick={() => void saveDetails(order.cover_count - 1)}>−</button>
-              <strong>{order.cover_count}</strong>
-              <button disabled={!writeEnabled} onClick={() => void saveDetails(order.cover_count + 1)}>+</button>
-            </div>
           </div>
 
           <div className="order-lines">

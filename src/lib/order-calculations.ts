@@ -7,6 +7,18 @@ export function calculateTotals(items: OrderItem[], covers: number, coverPrice: 
   return { subtotal, coverTotal, total: money(subtotal + coverTotal) };
 }
 
+export function aggregateMenuItemQuantities(
+  items: Pick<OrderItem, "menu_item_id" | "quantity">[],
+) {
+  return items.reduce<Record<string, number>>((quantities, item) => {
+    if (item.menu_item_id) {
+      quantities[item.menu_item_id] =
+        (quantities[item.menu_item_id] ?? 0) + item.quantity;
+    }
+    return quantities;
+  }, {});
+}
+
 export function validateAllYouCanEat(
   items: Pick<OrderItem, "item_name_snapshot" | "quantity">[],
   covers: number,
