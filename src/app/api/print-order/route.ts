@@ -11,7 +11,6 @@ import {
   PrintNodeSubmissionError,
 } from "@/lib/printnode";
 import { buildRaw80mmTicket, PRINT_JOB_LABELS } from "@/lib/print-ticket-raw";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
@@ -127,7 +126,6 @@ export async function POST(request: Request) {
 
   const { orderId, type } = parsed.data;
   const isWaiter = profile.role === "waiter";
-  const adminClient = createAdminClient();
 
   if (isWaiter && !["new_order", "order_update"].includes(type)) {
     return NextResponse.json(
@@ -136,14 +134,7 @@ export async function POST(request: Request) {
     );
   }
 
-  if (isWaiter && !adminClient) {
-    return NextResponse.json(
-      { error: "Stampa automatica non configurata sul server" },
-      { status: 503 },
-    );
-  }
-
-  const supabase = adminClient ?? sessionClient;
+  const supabase = sessionClient;
   const targetOrder =
     ["new_order", "order_update"].includes(type)
       ? await getOrderForAutomaticPrint(supabase, orderId)
