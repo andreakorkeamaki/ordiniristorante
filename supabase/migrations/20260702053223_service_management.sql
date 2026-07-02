@@ -35,6 +35,11 @@ alter table public.orders
 create index orders_service_status_idx
   on public.orders (service_id, status, created_at);
 
+-- This is a structural backfill, so it must not run the normal order-edit
+-- trigger. Migrations do not have an authenticated user and prepare_order()
+-- would otherwise replace updated_by with null.
+alter table public.orders disable trigger orders_prepare;
+
 do $$
 declare
   legacy_service_id uuid;
@@ -94,6 +99,8 @@ begin
   end if;
 end;
 $$;
+
+alter table public.orders enable trigger orders_prepare;
 
 alter table public.restaurant_services enable row level security;
 
