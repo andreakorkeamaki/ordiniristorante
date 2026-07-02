@@ -6,6 +6,7 @@ import { buildRaw80mmReceipt } from "@/lib/print-receipt-raw";
 import {
   createPrintNodeJob,
   getPrinterAvailability,
+  PrintNodeIdempotencyError,
   PrintNodeSubmissionError,
 } from "@/lib/printnode";
 import { createClient } from "@/lib/supabase/server";
@@ -43,6 +44,12 @@ export async function POST(request: Request) {
   if (order.status === "closed") {
     return NextResponse.json({ closed: true, idempotent: true });
   }
+  if (!["in_preparation", "bill_requested"].includes(order.status)) {
+    return NextResponse.json(
+      { error: "Il tavolo non è ancora pronto per la chiusura", closed: false },
+      { status: 409 },
+    );
+  }
 
   const availability = await getPrinterAvailability();
   if (!availability.available) {
@@ -55,45 +62,53 @@ export async function POST(request: Request) {
     );
   }
 
+  let printNodeJobId: number | null = null;
+  let idempotent = false;
+
   try {
-    const printNodeJobId = await createPrintNodeJob({
+    printNodeJobId = await createPrintNodeJob({
       title: `SCONTRINO #${order.order_number}`,
       content: buildRaw80mmReceipt(order),
       idempotencyKey: `${order.id}:receipt`,
       copies: 1,
     });
-
-    const { error } = await supabase.rpc("close_order", {
-      p_order_id: order.id,
-    });
-    if (error) {
+  } catch (error) {
+    if (error instanceof PrintNodeIdempotencyError) {
+      idempotent = true;
+    } else {
+      const outcomeUncertain =
+        error instanceof PrintNodeSubmissionError && error.outcomeUncertain;
       return NextResponse.json(
         {
-          error: `Scontrino inviato, ma il tavolo non è stato chiuso: ${error.message}`,
+          error: outcomeUncertain
+            ? "Esito stampa incerto: verifica la stampante. Tavolo non chiuso"
+            : `${error instanceof Error ? error.message : "Stampa non riuscita"}. Tavolo non chiuso`,
           closed: false,
-          printNodeJobId,
+          outcome: outcomeUncertain ? "uncertain" : "failed",
         },
-        { status: 409 },
+        { status: 503 },
       );
     }
+  }
 
-    return NextResponse.json({
-      closed: true,
-      copies: 1,
-      printNodeJobId,
-    });
-  } catch (error) {
-    const outcomeUncertain =
-      error instanceof PrintNodeSubmissionError && error.outcomeUncertain;
+  const { error: closeError } = await supabase.rpc("close_order", {
+    p_order_id: order.id,
+  });
+  if (closeError) {
     return NextResponse.json(
       {
-        error: outcomeUncertain
-          ? "Esito stampa incerto: verifica la stampante. Tavolo non chiuso"
-          : `${error instanceof Error ? error.message : "Stampa non riuscita"}. Tavolo non chiuso`,
+        error: `Scontrino inviato, ma il tavolo non è stato chiuso: ${closeError.message}`,
         closed: false,
-        outcome: outcomeUncertain ? "uncertain" : "failed",
+        printNodeJobId,
       },
-      { status: 503 },
+      { status: 409 },
     );
   }
+
+  return NextResponse.json({
+    closed: true,
+    copies: 1,
+    printNodeJobId,
+    idempotent,
+  });
 }
