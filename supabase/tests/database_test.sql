@@ -522,8 +522,8 @@ select is(
     where order_id = '00000000-0000-4000-9000-000000009921'
       and job_type = 'new_order'
   ),
-  'cancelled',
-  'cancelling stops the unfinished new-order job'
+  'printed',
+  'cancelling preserves the completed new-order print'
 );
 
 select throws_ok(
