@@ -41,6 +41,13 @@ export class PrintNodeSubmissionError extends Error {
   }
 }
 
+export class PrintNodeIdempotencyError extends PrintNodeSubmissionError {
+  constructor(message: string) {
+    super(message);
+    this.name = "PrintNodeIdempotencyError";
+  }
+}
+
 function getConfig() {
   const apiKey = process.env.PRINTNODE_API_KEY;
   const printerIdValue = process.env.PRINTNODE_PRINTER_ID;
@@ -156,6 +163,9 @@ export async function createPrintNodeJob(input: {
     );
   }
 
+  if (response.status === 409) {
+    throw new PrintNodeIdempotencyError(await errorMessage(response));
+  }
   if (!response.ok) {
     throw new PrintNodeSubmissionError(await errorMessage(response));
   }

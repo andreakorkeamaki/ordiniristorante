@@ -77,8 +77,7 @@ describe("buildRaw80mmReceipt", () => {
     expect(body).toContain("21,50 EUR");
     expect(body).toContain("COPERTO 2 x 1,90 EUR");
     expect(body).toContain("3,80 EUR");
-    expect(body).toContain("TOTALE");
-    expect(body).toContain("25,30 EUR");
+    expect(body).toContain("TOTALE 25,30 EUR");
     expect(ticket.subarray(-4)).toEqual(Buffer.from([0x1d, 0x56, 0x41, 0x10]));
 
     vi.useRealTimers();
