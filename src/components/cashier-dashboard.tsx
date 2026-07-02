@@ -589,7 +589,9 @@ function OrderCard({
         <time>{formatDateTime(order.sent_to_cashier_at ?? order.created_at)}</time>
       </header>
       <p className="card-meta">
-        {order.cover_count} coperti · {order.waiter?.full_name ?? "Staff"}
+        <span>{order.cover_count} coperti</span>
+        <span aria-hidden="true"> · </span>
+        <span className="card-waiter">{order.waiter?.full_name ?? "Staff"}</span>
       </p>
       {printStatus && <p className="card-print-status">{printStatus}</p>}
       <ul>
