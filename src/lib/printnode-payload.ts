@@ -5,6 +5,7 @@ export function buildPrintNodePayload(input: {
   title: string;
   content: Buffer;
   copies?: number;
+  source?: string;
 }) {
   const copies = input.copies ?? RAW_PRINT_COPIES;
   if (!Number.isSafeInteger(copies) || copies < 1 || copies > 10) {
@@ -16,7 +17,7 @@ export function buildPrintNodePayload(input: {
     title: input.title,
     contentType: "raw_base64" as const,
     content: input.content.toString("base64"),
-    source: "La Sagretta cassa",
+    source: input.source ?? "La Sagretta cassa",
     qty: copies,
     expireAfter: 600,
   };

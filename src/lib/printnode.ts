@@ -24,6 +24,13 @@ export interface PrintNodeJobState {
   createTimestamp: string;
 }
 
+interface PrintNodeJob {
+  id: number;
+  title?: string;
+  source?: string;
+  createTimestamp?: string;
+}
+
 export interface PrinterAvailability {
   configured: boolean;
   available: boolean;
@@ -43,7 +50,7 @@ export class PrintNodeSubmissionError extends Error {
 
 export class PrintNodeIdempotencyError extends PrintNodeSubmissionError {
   constructor(message: string) {
-    super(message);
+    super(message, true);
     this.name = "PrintNodeIdempotencyError";
   }
 }
@@ -137,6 +144,8 @@ export async function createPrintNodeJob(input: {
   content: Buffer;
   idempotencyKey: string;
   copies?: number;
+  source: string;
+  createdAfter?: string;
 }) {
   const config = getConfig();
   if (!config) throw new Error("PrintNode non configurato");
@@ -154,9 +163,15 @@ export async function createPrintNodeJob(input: {
         title: input.title,
         content: input.content,
         copies: input.copies,
+        source: input.source,
       })),
     });
   } catch (error) {
+    const recovered = await findPrintNodeJobBySource(
+      input.source,
+      input.createdAfter,
+    ).catch(() => null);
+    if (recovered) return { id: recovered.id, recovered: true };
     throw new PrintNodeSubmissionError(
       error instanceof Error ? error.message : "PrintNode non raggiungibile",
       true,
@@ -164,6 +179,11 @@ export async function createPrintNodeJob(input: {
   }
 
   if (response.status === 409) {
+    const recovered = await findPrintNodeJobBySource(
+      input.source,
+      input.createdAfter,
+    ).catch(() => null);
+    if (recovered) return { id: recovered.id, recovered: true };
     throw new PrintNodeIdempotencyError(await errorMessage(response));
   }
   if (!response.ok) {
@@ -178,7 +198,33 @@ export async function createPrintNodeJob(input: {
     );
   }
 
-  return printNodeJobId;
+  return { id: printNodeJobId, recovered: false };
+}
+
+export async function findPrintNodeJobBySource(
+  source: string,
+  createdAfter?: string,
+) {
+  const response = await request("/printjobs");
+  if (!response.ok) throw new Error(await errorMessage(response));
+
+  const jobs = (await response.json()) as PrintNodeJob[];
+  const lowerBound = createdAfter
+    ? new Date(createdAfter).getTime() - 60_000
+    : Number.NEGATIVE_INFINITY;
+
+  return (
+    jobs
+      .filter(
+        (job) =>
+          job.source === source &&
+          Number.isSafeInteger(Number(job.id)) &&
+          Number(job.id) > 0 &&
+          (!job.createTimestamp ||
+            new Date(job.createTimestamp).getTime() >= lowerBound),
+      )
+      .sort((a, b) => Number(b.id) - Number(a.id))[0] ?? null
+  );
 }
 
 export async function getPrintNodeJobStates(ids: number[]) {
