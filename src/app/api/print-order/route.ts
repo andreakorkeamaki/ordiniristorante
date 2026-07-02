@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentProfile } from "@/lib/auth";
-import { getWaiterInitialPrintDecision } from "@/lib/automatic-print-policy";
+import { getInitialPrintDecision } from "@/lib/automatic-print-policy";
 import {
   cancelPrintNodeJobs,
   createPrintNodeJob,
@@ -143,13 +143,23 @@ export async function POST(request: Request) {
   }
 
   const supabase = adminClient ?? sessionClient;
+  const initialOrder =
+    type === "new_order"
+      ? await getOrderForAutomaticPrint(supabase, orderId)
+      : null;
 
   if (isWaiter) {
-    const initialOrder = await getOrderForAutomaticPrint(supabase, orderId);
     if (!initialOrder) {
       return NextResponse.json({ error: "Comanda non disponibile" }, { status: 404 });
     }
-    const decision = getWaiterInitialPrintDecision(profile.id, initialOrder);
+  }
+
+  if (type === "new_order") {
+    if (!initialOrder) {
+      return NextResponse.json({ error: "Comanda non disponibile" }, { status: 404 });
+    }
+
+    const decision = getInitialPrintDecision(profile, initialOrder);
     if (decision === "not-owner") {
       return NextResponse.json({ error: "Comanda non disponibile" }, { status: 404 });
     }
@@ -174,7 +184,7 @@ export async function POST(request: Request) {
         const currentOrder = await getOrderForAutomaticPrint(supabase, orderId);
         if (
           !currentOrder ||
-          currentOrder.created_by !== profile.id ||
+          (isWaiter && currentOrder.created_by !== profile.id) ||
           currentOrder.status !== "pending_cashier"
         ) {
           return NextResponse.json({ error: error.message }, { status: 400 });

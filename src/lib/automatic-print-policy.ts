@@ -1,4 +1,4 @@
-import type { Order } from "@/types/domain";
+import type { AppRole, Order } from "@/types/domain";
 
 type InitialPrintOrder = Pick<
   Order,
@@ -10,6 +10,20 @@ export type WaiterInitialPrintDecision =
   | "not-owner"
   | "invalid-status"
   | "submission-too-old";
+
+export function getInitialPrintDecision(
+  profile: { id: string; role: AppRole },
+  order: InitialPrintOrder,
+  now = Date.now(),
+): WaiterInitialPrintDecision {
+  if (profile.role !== "waiter") {
+    return ["draft", "pending_cashier"].includes(order.status)
+      ? "allowed"
+      : "invalid-status";
+  }
+
+  return getWaiterInitialPrintDecision(profile.id, order, now);
+}
 
 export function getWaiterInitialPrintDecision(
   waiterId: string,
