@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  aggregateMenuItemQuantities,
   calculateTotals,
   getOrderSubmissionIssue,
   validateAllYouCanEat,
@@ -24,6 +25,20 @@ function item(name: string, quantity: number, lineTotal: number): OrderItem {
 }
 
 describe("order calculations", () => {
+  it("somma le quantità dello stesso prodotto anche su righe diverse", () => {
+    const first = item("Tris di bruschette miste", 1, 5);
+    const second = item("Tris di bruschette miste", 2, 10);
+    const water = item("Acqua", 1, 2);
+    first.menu_item_id = "tris";
+    second.menu_item_id = "tris";
+    water.menu_item_id = "acqua";
+
+    expect(aggregateMenuItemQuantities([first, second, water])).toEqual({
+      tris: 3,
+      acqua: 1,
+    });
+  });
+
   it("calcola subtotale, coperti e totale con decimali esatti", () => {
     expect(calculateTotals([item("Margherita", 2, 15), item("Acqua", 1, 2)], 3, 1.9)).toEqual({
       subtotal: 17,

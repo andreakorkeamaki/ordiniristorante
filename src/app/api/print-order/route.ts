@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentProfile } from "@/lib/auth";
 import { getInitialPrintDecision } from "@/lib/automatic-print-policy";
+import { canSendOrderUpdate } from "@/lib/order-workflow";
 import {
   cancelPrintNodeJobs,
   createPrintNodeJob,
@@ -10,7 +11,6 @@ import {
   PrintNodeSubmissionError,
 } from "@/lib/printnode";
 import { buildRaw80mmTicket, PRINT_JOB_LABELS } from "@/lib/print-ticket-raw";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
@@ -126,40 +126,32 @@ export async function POST(request: Request) {
 
   const { orderId, type } = parsed.data;
   const isWaiter = profile.role === "waiter";
-  const adminClient = createAdminClient();
 
-  if (isWaiter && type !== "new_order") {
+  if (isWaiter && !["new_order", "order_update"].includes(type)) {
     return NextResponse.json(
-      { error: "Il cameriere può avviare solo la prima stampa della nuova comanda" },
+      { error: "Il cameriere può stampare soltanto la comanda e i suoi aggiornamenti" },
       { status: 403 },
     );
   }
 
-  if (isWaiter && !adminClient) {
-    return NextResponse.json(
-      { error: "Stampa automatica non configurata sul server" },
-      { status: 503 },
-    );
-  }
-
-  const supabase = adminClient ?? sessionClient;
-  const initialOrder =
-    type === "new_order"
+  const supabase = sessionClient;
+  const targetOrder =
+    ["new_order", "order_update"].includes(type)
       ? await getOrderForAutomaticPrint(supabase, orderId)
       : null;
 
   if (isWaiter) {
-    if (!initialOrder) {
+    if (!targetOrder || targetOrder.created_by !== profile.id) {
       return NextResponse.json({ error: "Comanda non disponibile" }, { status: 404 });
     }
   }
 
   if (type === "new_order") {
-    if (!initialOrder) {
+    if (!targetOrder) {
       return NextResponse.json({ error: "Comanda non disponibile" }, { status: 404 });
     }
 
-    const decision = getInitialPrintDecision(profile, initialOrder);
+    const decision = getInitialPrintDecision(profile, targetOrder);
     if (decision === "not-owner") {
       return NextResponse.json({ error: "Comanda non disponibile" }, { status: 404 });
     }
@@ -176,7 +168,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (initialOrder.status === "draft") {
+    if (targetOrder.status === "draft") {
       const { error } = await sessionClient.rpc("send_order_to_cashier", {
         p_order_id: orderId,
       });
@@ -193,6 +185,16 @@ export async function POST(request: Request) {
     }
   }
 
+  if (
+    type === "order_update" &&
+    (!targetOrder || !canSendOrderUpdate(targetOrder.status))
+  ) {
+    return NextResponse.json(
+      { error: "La comanda non può inviare aggiornamenti in questo stato" },
+      { status: 409 },
+    );
+  }
+
   if (type === "reprint") {
     const { error } = await sessionClient.rpc("request_reprint", { p_order_id: orderId });
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
@@ -203,6 +205,8 @@ export async function POST(request: Request) {
     .select("*")
     .eq("order_id", orderId)
     .eq("job_type", type)
+    .order("created_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
 
   if (jobError || !existingJob) {

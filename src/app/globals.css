@@ -1116,6 +1116,7 @@ code {
 }
 
 .product-button {
+  position: relative;
   display: grid;
   min-height: 8rem;
   align-content: start;
@@ -1128,6 +1129,24 @@ code {
   text-align: left;
 }
 
+.product-quantity-badge {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: grid;
+  min-width: 1.65rem;
+  height: 1.65rem;
+  padding: 0 0.35rem;
+  place-items: center;
+  border: 2px solid #fffdf8;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--red);
+  box-shadow: 0 2px 6px rgb(33 28 24 / 20%);
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
 .product-button:hover:not(:disabled) {
   border-color: #b88076;
   background: #fff7eb;
@@ -1135,6 +1154,10 @@ code {
 
 .product-button span {
   font-weight: 800;
+}
+
+.product-button > span:not(.product-quantity-badge) {
+  padding-right: 2rem;
 }
 
 .product-button strong {
@@ -1186,6 +1209,10 @@ code {
   padding: 0.8rem 1rem;
   border-bottom: 1px solid var(--line);
   font-weight: 750;
+}
+
+.covers-row-menu {
+  min-height: 4.1rem;
 }
 
 .stepper {

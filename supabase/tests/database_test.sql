@@ -1,5 +1,5 @@
 begin;
-select plan(53);
+select plan(67);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -7,7 +7,18 @@ select has_table('public', 'print_jobs', 'print_jobs exists');
 select has_table('public', 'menu_items', 'menu_items exists');
 select has_table('public', 'restaurant_services', 'restaurant services exist');
 select has_index('public', 'orders', 'orders_one_active_per_table_idx', 'one active order index exists');
-select has_index('public', 'print_jobs', 'print_jobs_order_type_key', 'print jobs are unique by order and type');
+select has_index(
+  'public',
+  'print_jobs',
+  'print_jobs_singleton_type_key',
+  'single-run print job types remain unique by order'
+);
+select has_index(
+  'public',
+  'print_jobs',
+  'print_jobs_one_open_update_per_order_idx',
+  'only one uncompleted update is queued per order'
+);
 select has_index(
   'public',
   'restaurant_services',
@@ -50,6 +61,17 @@ select policies_are(
     'restaurant_services_staff_select'
   ],
   'restaurant service policies are explicit'
+);
+select policies_are(
+  'public',
+  'print_jobs',
+  array[
+    'print_jobs_cashier_insert',
+    'print_jobs_cashier_update',
+    'print_jobs_staff_select',
+    'print_jobs_waiter_automatic_update'
+  ],
+  'print job policies keep waiter printing separate from cashier controls'
 );
 select function_returns('public', 'send_order_to_cashier', array['uuid'], 'orders', 'send RPC returns order');
 select function_returns('public', 'change_order_item_quantity', array['uuid', 'integer'], 'order_items', 'quantity RPC returns item');
@@ -258,6 +280,39 @@ select is(
   'sending writes an audit event'
 );
 
+set local role authenticated;
+
+select results_eq(
+  $$
+    update public.print_jobs
+    set status = 'printing',
+        processing_started_at = now(),
+        last_attempt_at = now(),
+        retry_count = retry_count + 1
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and job_type = 'new_order'
+      and status = 'pending'
+    returning status::text
+  $$,
+  $$values ('printing')$$,
+  'a waiter can claim the initial print job for their own order'
+);
+select results_eq(
+  $$
+    update public.print_jobs
+    set printnode_job_id = 990001,
+        submitted_at = now()
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and job_type = 'new_order'
+      and status = 'printing'
+    returning printnode_job_id
+  $$,
+  $$values (990001::bigint)$$,
+  'a waiter can persist the PrintNode submission for their own print job'
+);
+
+reset role;
+
 select throws_ok(
   $$select public.send_order_to_cashier('00000000-0000-4000-9000-000000009922')$$,
   'P0001',
@@ -268,6 +323,135 @@ select is(
   (select status::text from public.orders where id = '00000000-0000-4000-9000-000000009922'),
   'draft',
   'a rejected order remains a draft'
+);
+
+update public.profiles
+set role = 'cashier'
+where id = '00000000-0000-4000-9000-000000009901';
+
+select lives_ok(
+  $$
+    select public.mark_print_job_manual(
+      (
+        select id
+        from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009921'
+          and job_type = 'new_order'
+      )
+    )
+  $$,
+  'the cashier can complete the initial print'
+);
+
+update public.profiles
+set role = 'waiter'
+where id = '00000000-0000-4000-9000-000000009901';
+
+select lives_ok(
+  $$
+    select public.add_order_item(
+      '00000000-0000-4000-9000-000000009921',
+      '00000000-0000-4000-8000-000000001002',
+      ''
+    )
+  $$,
+  'a waiter can add products after the first submission'
+);
+select is(
+  (
+    select status::text
+    from public.orders
+    where id = '00000000-0000-4000-9000-000000009921'
+  ),
+  'in_preparation',
+  'adding products does not reopen or replace the order'
+);
+select is(
+  (
+    select count(*)::integer
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and job_type = 'order_update'
+      and status = 'pending'
+  ),
+  1,
+  'the first post-submit change creates an update print job'
+);
+
+set local role authenticated;
+
+select results_eq(
+  $$
+    update public.print_jobs
+    set status = 'printing',
+        processing_started_at = now(),
+        last_attempt_at = now(),
+        retry_count = retry_count + 1
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and job_type = 'order_update'
+      and status = 'pending'
+    returning status::text
+  $$,
+  $$values ('printing')$$,
+  'a waiter can claim an update print job for their own order'
+);
+
+reset role;
+
+update public.profiles
+set role = 'cashier'
+where id = '00000000-0000-4000-9000-000000009901';
+
+select lives_ok(
+  $$
+    select public.mark_print_job_manual(
+      (
+        select id
+        from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009921'
+          and job_type = 'order_update'
+        order by created_at desc
+        limit 1
+      )
+    )
+  $$,
+  'the cashier can complete an update print'
+);
+
+update public.profiles
+set role = 'waiter'
+where id = '00000000-0000-4000-9000-000000009901';
+
+select lives_ok(
+  $$
+    select public.add_order_item(
+      '00000000-0000-4000-9000-000000009921',
+      '00000000-0000-4000-8000-000000001003',
+      ''
+    )
+  $$,
+  'a waiter can add another round after an update was printed'
+);
+select is(
+  (
+    select count(*)::integer
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and job_type = 'order_update'
+  ),
+  2,
+  'each completed round can create a later update print job'
+);
+select is(
+  (
+    select count(*)::integer
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and job_type = 'order_update'
+      and status = 'pending'
+  ),
+  1,
+  'only the latest update round remains pending'
 );
 
 update public.profiles
@@ -292,6 +476,31 @@ select is(
   1,
   'only one reprint job exists for the order'
 );
+
+update public.profiles
+set role = 'waiter'
+where id = '00000000-0000-4000-9000-000000009901';
+
+set local role authenticated;
+
+select is_empty(
+  $$
+    update public.print_jobs
+    set status = 'printing'
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and job_type = 'reprint'
+      and status = 'pending'
+    returning id
+  $$,
+  'a waiter cannot claim a reprint job'
+);
+
+reset role;
+
+update public.profiles
+set role = 'cashier'
+where id = '00000000-0000-4000-9000-000000009901';
+
 select lives_ok(
   $$select public.cancel_order('00000000-0000-4000-9000-000000009921')$$,
   'a cashier can cancel an order'
@@ -313,8 +522,8 @@ select is(
     where order_id = '00000000-0000-4000-9000-000000009921'
       and job_type = 'new_order'
   ),
-  'cancelled',
-  'cancelling stops the unfinished new-order job'
+  'printed',
+  'cancelling preserves the completed new-order print'
 );
 
 select throws_ok(
