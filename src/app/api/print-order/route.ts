@@ -349,7 +349,9 @@ async function loadOrder(
     supabase.from("profiles").select("id, full_name, role, active"),
     supabase
       .from("order_items")
-      .select("*, extras:order_item_extras(*)")
+      .select(
+        "*, menu_item:menu_items(category:menu_categories(slug)), extras:order_item_extras(*)",
+      )
       .eq("order_id", orderId)
       .order("created_at"),
   ]);
@@ -363,12 +365,23 @@ async function loadOrder(
   const profiles = new Map(
     ((profilesResult.data ?? []) as Profile[]).map((item) => [item.id, item]),
   );
+  const items = (linesResult.data ?? []).map((row) => {
+    const printableRow = row as OrderItem & {
+      menu_item?: { category?: { slug?: string | null } | null } | null;
+    };
+    const { menu_item: menuItem, ...item } = printableRow;
+
+    return {
+      ...item,
+      category_slug: menuItem?.category?.slug ?? null,
+    };
+  });
 
   return {
     ...rawOrder,
     table: tables.get(rawOrder.table_id),
     waiter: profiles.get(rawOrder.created_by),
-    items: (linesResult.data ?? []) as OrderItem[],
+    items,
   } satisfies Order;
 }
 

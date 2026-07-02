@@ -110,6 +110,7 @@ export interface OrderItem {
   notes: string;
   preparation_area_snapshot: PreparationArea;
   version: number;
+  category_slug?: string | null;
   extras: OrderItemExtra[];
 }
 

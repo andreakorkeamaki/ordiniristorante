@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildRaw80mmTicket } from "@/lib/print-ticket-raw";
+import {
+  buildRaw80mmTicket,
+  getPinsaPrintPrefix,
+} from "@/lib/print-ticket-raw";
 import type { Order } from "@/types/domain";
 
 const order: Order = {
@@ -44,6 +47,7 @@ const order: Order = {
       notes: "ben cotta",
       preparation_area_snapshot: "pizzeria",
       version: 1,
+      category_slug: "rosse",
       extras: [
         {
           id: "extra-1",
@@ -59,6 +63,21 @@ const order: Order = {
 };
 
 describe("buildRaw80mmTicket", () => {
+  it("prefissa le pinse rosse, bianche e speciali", () => {
+    expect(getPinsaPrintPrefix("rosse")).toBe("R");
+    expect(getPinsaPrintPrefix("bianche")).toBe("B");
+    expect(getPinsaPrintPrefix("speciali")).toBe("S");
+    expect(getPinsaPrintPrefix("antipasti")).toBe("");
+  });
+
+  it("stampa tutto il ticket a larghezza e altezza doppie", () => {
+    const ticket = buildRaw80mmTicket(order, "new_order");
+
+    expect(ticket.includes(Buffer.from([0x1d, 0x21, 0x11]))).toBe(true);
+    expect(ticket.includes(Buffer.from([0x1d, 0x21, 0x00]))).toBe(false);
+    expect(ticket.toString("ascii")).toContain("-".repeat(24));
+  });
+
   it("renders an 80 mm ESC/POS reprint ticket with the required label", () => {
     const ticket = buildRaw80mmTicket(order, "reprint");
     const body = ticket.toString("ascii");
@@ -66,7 +85,7 @@ describe("buildRaw80mmTicket", () => {
     expect(body).toContain("RISTAMPA");
     expect(body).toContain("COMANDA #42");
     expect(body).toContain("TAVOLO 7 - Terrazza");
-    expect(body).toContain("2x Pinsa Margherita");
+    expect(body).toContain("2x R Pinsa Margherita");
     expect(body).toContain("CAMERIERE: Andre");
     expect(ticket.subarray(-4)).toEqual(Buffer.from([0x1d, 0x56, 0x41, 0x10]));
   });
@@ -77,7 +96,7 @@ describe("buildRaw80mmTicket", () => {
     expect(body).toContain("NUOVA COMANDA");
     expect(body).toContain("TAVOLO 7");
     expect(body).toContain("COPERTI: 2");
-    expect(body).toContain("2x Pinsa Margherita");
+    expect(body).toContain("2x R Pinsa Margherita");
     expect(body).toContain("NOTA: ben cotta");
     expect(body).toContain("+ 1x Mozzarella");
     expect(body).toContain("NOTE TAVOLO:");
