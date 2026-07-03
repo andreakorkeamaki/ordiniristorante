@@ -948,8 +948,8 @@ select is(
     from public.orders
     where id = '00000000-0000-4000-9000-000000009922'
   ),
-  'cancelled',
-  'unsent drafts are cancelled when the service closes'
+  'closed',
+  'submitted orders are closed when the service closes'
 );
 select is(
   (
