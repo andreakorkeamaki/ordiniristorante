@@ -1029,16 +1029,21 @@ code {
 }
 
 .table-card {
-  display: flex;
   min-height: 11.5rem;
-  flex-direction: column;
-  padding: 1rem;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-top: 4px solid #a9a098;
   border-radius: 1rem;
   background: var(--surface);
   box-shadow: 0 5px 18px rgb(45 31 18 / 5%);
   transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.table-card-link {
+  display: flex;
+  min-height: 11.1rem;
+  flex-direction: column;
+  padding: 1rem;
 }
 
 .table-card:hover {
@@ -1074,22 +1079,47 @@ code {
 .status-in_preparation .status-dot { background: var(--green); }
 .status-bill_requested .status-dot { background: #795289; }
 
-.table-card > strong {
+.table-card-link > strong {
   margin-top: auto;
   font-family: Georgia, serif;
   font-size: 1.55rem;
 }
 
-.table-card p {
+.table-card-link p {
   margin: 0.2rem 0 0.75rem;
   color: var(--muted);
   font-size: 0.85rem;
 }
 
-.table-card small {
+.table-card-link small {
   margin-top: 0.45rem;
   color: var(--muted);
   font-size: 0.68rem;
+}
+
+.table-card-reprint {
+  width: 100%;
+  min-height: 2.65rem;
+  border: 0;
+  border-top: 1px solid var(--line);
+  color: #5f2019;
+  background: #fff5ed;
+  font-weight: 800;
+}
+
+.table-card-reprint:hover:not(:disabled) {
+  background: #ffe8d8;
+}
+
+.table-card-reprint:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.table-reprint-message {
+  width: 100%;
+  margin-bottom: 1rem;
+  text-align: left;
 }
 
 .status-label,

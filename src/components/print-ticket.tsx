@@ -1,5 +1,6 @@
 import { formatDateTime, formatTime } from "@/lib/format";
 import { getOrderLocationLabel } from "@/lib/order-display";
+import { aggregateIdenticalOrderItems } from "@/lib/order-items";
 import type { Order } from "@/types/domain";
 
 export function PrintTicket({ order, label }: { order: Order; label: string }) {
@@ -19,7 +20,7 @@ export function PrintTicket({ order, label }: { order: Order; label: string }) {
         <p>CAMERIERE: {order.waiter?.full_name ?? "—"}</p>
       </div>
       <div className="ticket-lines">
-        {order.items?.map((item) => (
+        {aggregateIdenticalOrderItems(order.items ?? []).map((item) => (
           <div key={item.id}>
             <p><strong>{item.quantity}×</strong> {item.item_name_snapshot}</p>
             {item.notes && <small>— {item.notes}</small>}

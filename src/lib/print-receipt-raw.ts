@@ -1,5 +1,6 @@
 import type { Order } from "@/types/domain";
 import { getOrderLocationLabel } from "@/lib/order-display";
+import { aggregateIdenticalOrderItems } from "@/lib/order-items";
 
 const LINE_WIDTH = 42;
 const DOUBLE_TEXT_SIZE = Buffer.from([0x1d, 0x21, 0x11]);
@@ -84,7 +85,7 @@ export function buildRaw80mmReceipt(order: Order) {
     text("-".repeat(LINE_WIDTH)),
   ];
 
-  for (const item of order.items ?? []) {
+  for (const item of aggregateIdenticalOrderItems(order.items ?? [])) {
     for (const line of wrap(item.item_name_snapshot)) chunks.push(text(line));
     chunks.push(
       text(row(

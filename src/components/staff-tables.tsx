@@ -19,7 +19,7 @@ import type {
   RestaurantTable,
 } from "@/types/domain";
 
-export function StaffTables() {
+export function StaffTables({ profile }: { profile: Profile }) {
   const router = useRouter();
   const { canWrite, blockReason, markUnreliable } = useConnection();
   const { service, loading: serviceLoading } = useCurrentService();
@@ -31,6 +31,9 @@ export function StaffTables() {
   const [showTakeawayForm, setShowTakeawayForm] = useState(false);
   const [creatingTakeaway, setCreatingTakeaway] = useState(false);
   const [takeawayError, setTakeawayError] = useState("");
+  const [reprintTarget, setReprintTarget] = useState<Order | null>(null);
+  const [reprintingOrderId, setReprintingOrderId] = useState<string | null>(null);
+  const [reprintMessage, setReprintMessage] = useState("");
 
   const load = useCallback(async () => {
     if (serviceLoading) return;
@@ -146,6 +149,16 @@ export function StaffTables() {
         </span>
       </section>
 
+      {reprintMessage && (
+        <button
+          className="external-update table-reprint-message"
+          onClick={() => setReprintMessage("")}
+          type="button"
+        >
+          {reprintMessage} · Chiudi
+        </button>
+      )}
+
       <section className="takeaway-section">
         <div className="takeaway-section-heading">
           <div>
@@ -204,6 +217,9 @@ export function StaffTables() {
             <TableCard
               enabled={Boolean(service && !isPreviousService(service))}
               order={order}
+              onRequestReprint={setReprintTarget}
+              reprintBusy={reprintingOrderId === order?.id}
+              reprintDisabled={!canWrite || reprintingOrderId !== null}
               service={service}
               table={table}
               updater={updater}
@@ -249,6 +265,56 @@ export function StaffTables() {
           </form>
         </div>
       )}
+
+      {reprintTarget && (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="table-reprint-title"
+        >
+          <div className="takeaway-modal">
+            <div className="modal-heading">
+              <div>
+                <p className="eyebrow">Ristampa comanda</p>
+                <h2 id="table-reprint-title">
+                  Comanda #{reprintTarget.order_number}
+                </h2>
+              </div>
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => setReprintTarget(null)}
+              >
+                Chiudi
+              </button>
+            </div>
+            <p>
+              Conferma solo se serve davvero un’altra copia: la comanda verrà
+              inviata nuovamente alla stampante.
+            </p>
+            <div className="modal-actions">
+              <button
+                className="button"
+                type="button"
+                onClick={() => setReprintTarget(null)}
+              >
+                Annulla
+              </button>
+              <button
+                className="button button-primary"
+                disabled={!canWrite || reprintingOrderId !== null}
+                type="button"
+                onClick={() => void reprintOrder(reprintTarget)}
+              >
+                {reprintingOrderId === reprintTarget.id
+                  ? "Ristampa…"
+                  : "Conferma ristampa"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 
@@ -276,6 +342,62 @@ export function StaffTables() {
     const created = order as Order;
     router.push(`/staff/order/${created.id}`);
   }
+
+  async function reprintOrder(order: Order) {
+    if (!canWrite || reprintingOrderId) return;
+
+    setReprintingOrderId(order.id);
+    setReprintMessage("");
+    try {
+      const response = await fetch("/api/print-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId: order.id,
+          type: "reprint",
+          actionKey: crypto.randomUUID(),
+          reason: `Ristampa richiesta dai tavoli da ${profile.full_name}`,
+        }),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        message?: string;
+        idempotent?: boolean;
+        outcome?: string;
+      };
+
+      if (!response.ok && response.status !== 202) {
+        setReprintMessage(
+          payload.error ?? "Ristampa non riuscita. Verifica la cassa e la stampante.",
+        );
+      } else if (
+        response.status === 202 ||
+        ["accepted_state_pending", "verification_required"].includes(
+          payload.outcome ?? "",
+        )
+      ) {
+        setReprintMessage(
+          payload.message ??
+            payload.error ??
+            "Ristampa presa in carico: verifica il foglio prima di riprovare.",
+        );
+      } else {
+        setReprintMessage(
+          payload.idempotent
+            ? "Ristampa già presa in carico: nessun doppio invio."
+            : "Ristampa inviata alla stampante.",
+        );
+      }
+    } catch {
+      markUnreliable();
+      setReprintMessage(
+        "Connessione non affidabile. Verifica la stampante prima di ristampare ancora.",
+      );
+    } finally {
+      setReprintTarget(null);
+      setReprintingOrderId(null);
+    }
+  }
 }
 
 function getCurrentLocalDateTime() {
@@ -287,12 +409,18 @@ function getCurrentLocalDateTime() {
 function TableCard({
   enabled,
   order,
+  onRequestReprint,
+  reprintBusy,
+  reprintDisabled,
   service,
   table,
   updater,
 }: {
   enabled: boolean;
   order: Order | undefined;
+  onRequestReprint: (order: Order) => void;
+  reprintBusy: boolean;
+  reprintDisabled: boolean;
   service: RestaurantService | null;
   table: RestaurantTable;
   updater: Profile | null | undefined;
@@ -328,17 +456,30 @@ function TableCard({
   if (!enabled) {
     return (
       <article className="table-card status-free is-disabled">
-        {content}
+        <div className="table-card-link">{content}</div>
       </article>
     );
   }
 
+  const canReprint = order
+    ? ["confirmed", "in_preparation", "bill_requested"].includes(order.status)
+    : false;
+
   return (
-    <Link
-      className={`table-card status-${order?.status ?? "free"}`}
-      href={`/staff/table/${table.id}`}
-    >
-      {content}
-    </Link>
+    <article className={`table-card status-${order?.status ?? "free"}`}>
+      <Link className="table-card-link" href={`/staff/table/${table.id}`}>
+        {content}
+      </Link>
+      {order && canReprint && (
+        <button
+          className="table-card-reprint"
+          disabled={reprintDisabled}
+          onClick={() => onRequestReprint(order)}
+          type="button"
+        >
+          {reprintBusy ? "Ristampa…" : "Ristampa comanda"}
+        </button>
+      )}
+    </article>
   );
 }

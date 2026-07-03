@@ -2,6 +2,17 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 const source = fs.readFileSync(new URL("../legacy/app.js", import.meta.url), "utf8");
+const translationSql = fs.readFileSync(
+  new URL(
+    "../supabase/migrations/20260703051200_menu_english_translations.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const seedTranslationSql = translationSql.replace(
+  "The whole table must take part.",
+  "Available for the number of guests selected.",
+);
 const constants = source.slice(0, source.indexOf("const app ="));
 const context = {};
 vm.createContext(context);
@@ -26,18 +37,20 @@ const statements = [
   "begin;",
   "",
   `insert into public.restaurant_settings (
-  id, restaurant_name, cover_charge, default_print_copies, allergen_notice
+  id, restaurant_name, cover_charge, dine_in_print_copies, takeaway_print_copies, allergen_notice
 ) values (
   '00000000-0000-0000-0000-000000000001',
   'La Sagretta',
   1.90,
   3,
+  1,
   'Per allergie o intolleranze chiedi informazioni al personale prima di ordinare.'
 )
 on conflict (id) do update set
   restaurant_name = excluded.restaurant_name,
   cover_charge = excluded.cover_charge,
-  default_print_copies = excluded.default_print_copies,
+  dine_in_print_copies = excluded.dine_in_print_copies,
+  takeaway_print_copies = excluded.takeaway_print_copies,
   allergen_notice = excluded.allergen_notice;`,
   "",
 ];
@@ -119,7 +132,7 @@ on conflict (id) do update set table_number = excluded.table_number, active = tr
   );
 }
 
-statements.push("", "commit;", "");
+statements.push("", seedTranslationSql.trim(), "", "commit;", "");
 fs.writeFileSync(
   new URL("../supabase/seed.sql", import.meta.url),
   statements.join("\n"),

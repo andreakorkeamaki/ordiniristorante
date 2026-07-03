@@ -19,7 +19,7 @@ export function PublicMenu() {
   const [query, setQuery] = useState("");
   const [language, setLanguage] = useState<"it" | "en">("it");
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(false);
 
   const load = useCallback(async () => {
     const supabase = createClient();
@@ -44,7 +44,7 @@ export function PublicMenu() {
 
     const firstError = settings.error ?? categories.error ?? items.error ?? extras.error;
     if (firstError) {
-      setError("Menu non disponibile. Riprova tra poco.");
+      setError(true);
       setLoading(false);
       return;
     }
@@ -55,7 +55,7 @@ export function PublicMenu() {
       items: (items.data ?? []) as MenuItem[],
       extras: (extras.data ?? []) as MenuExtra[],
     });
-    setError("");
+    setError(false);
     setLoading(false);
   }, []);
 
@@ -75,15 +75,28 @@ export function PublicMenu() {
     };
   }, [load]);
 
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
+
   const filtered = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase("it");
+    const locale = language === "en" ? "en" : "it";
+    const needle = query.trim().toLocaleLowerCase(locale);
     if (!needle) return data.items;
     return data.items.filter((item) =>
-      [item.name, item.name_en, item.description, item.ingredients, ...item.allergens]
+      [
+        item.name,
+        item.name_en,
+        item.description,
+        item.description_en,
+        item.ingredients,
+        item.ingredients_en,
+        ...item.allergens,
+      ]
         .filter(Boolean)
-        .some((value) => value!.toLocaleLowerCase("it").includes(needle)),
+        .some((value) => value!.toLocaleLowerCase(locale).includes(needle)),
     );
-  }, [data.items, query]);
+  }, [data.items, language, query]);
 
   if (loading) return <div className="loader menu-loader" aria-label="Caricamento menu" />;
 
@@ -95,7 +108,11 @@ export function PublicMenu() {
             <Image
               className="menu-brand-logo"
               src="/images/la-sagretta-logo.png"
-              alt="La Sagretta, tavola calda, pinsa romana e cucina casareccia"
+              alt={
+                language === "en"
+                  ? "La Sagretta, Roman pinsa and homemade cooking"
+                  : "La Sagretta, tavola calda, pinsa romana e cucina casareccia"
+              }
               width={2051}
               height={767}
               priority
@@ -105,7 +122,7 @@ export function PublicMenu() {
               className="language-toggle"
               type="button"
               onClick={() => setLanguage((current) => (current === "it" ? "en" : "it"))}
-              aria-label="Cambia lingua"
+              aria-label={language === "it" ? "Switch to English" : "Passa all'italiano"}
             >
               {language === "it" ? "IT · EN" : "EN · IT"}
             </button>
@@ -136,7 +153,9 @@ export function PublicMenu() {
             </div>
 
             <div className="menu-hero-food" aria-hidden="true">
-              <span className="menu-hero-burst">Fatta con cura</span>
+              <span className="menu-hero-burst">
+                {language === "en" ? "Made with care" : "Fatta con cura"}
+              </span>
               <Image
                 src="/images/la-sagretta-pinsa.png"
                 alt=""
@@ -150,10 +169,19 @@ export function PublicMenu() {
         </div>
       </header>
 
-      {error && <p className="form-error menu-error">{error}</p>}
+      {error && (
+        <p className="form-error menu-error">
+          {language === "en"
+            ? "Menu unavailable. Please try again shortly."
+            : "Menu non disponibile. Riprova tra poco."}
+        </p>
+      )}
 
       {!query && (
-        <nav className="category-strip" aria-label="Categorie">
+        <nav
+          className="category-strip"
+          aria-label={language === "en" ? "Categories" : "Categorie"}
+        >
           {data.categories.map((category) => (
             <a href={`#category-${category.slug}`} key={category.id}>
               {translated(category.name, category.name_en, language)}
@@ -180,9 +208,11 @@ export function PublicMenu() {
                     — {String(category.sort_order + 1).padStart(2, "0")} —
                   </span>
                   <h2>{translated(category.name, category.name_en, language)}</h2>
-                  {category.description && <p>{category.description}</p>}
+                  {translated(category.description, category.description_en, language) && (
+                    <p>{translated(category.description, category.description_en, language)}</p>
+                  )}
                 </div>
-                <CategoryArtwork slug={category.slug} />
+                <CategoryArtwork slug={category.slug} language={language} />
               </div>
               <div className="public-products">
                 {items.map((item) => (
@@ -191,7 +221,7 @@ export function PublicMenu() {
                 {extras.map((extra) => (
                   <article className="public-product" key={extra.id}>
                     <div className="product-title-line">
-                      <h3>{extra.name}</h3>
+                      <h3>{translated(extra.name, extra.name_en, language)}</h3>
                       <span className="product-leader" aria-hidden="true" />
                     </div>
                     <strong>{formatCurrency(extra.price)}</strong>
@@ -203,14 +233,24 @@ export function PublicMenu() {
         })}
         {!filtered.length && query && (
           <section className="empty-card">
-            <h2>Nessun risultato</h2>
-            <p>Prova con un nome o un ingrediente diverso.</p>
+            <h2>{language === "en" ? "No results" : "Nessun risultato"}</h2>
+            <p>
+              {language === "en"
+                ? "Try a different product name or ingredient."
+                : "Prova con un nome o un ingrediente diverso."}
+            </p>
           </section>
         )}
         {data.settings.allergen_notice && (
           <aside className="allergen-notice">
-            <strong>Allergeni</strong>
-            <p>{data.settings.allergen_notice}</p>
+            <strong>{language === "en" ? "Allergens" : "Allergeni"}</strong>
+            <p>
+              {translated(
+                data.settings.allergen_notice,
+                data.settings.allergen_notice_en,
+                language,
+              )}
+            </p>
           </aside>
         )}
       </div>
@@ -226,7 +266,11 @@ export function PublicMenu() {
         />
         <div>
           <strong>{data.settings.restaurant_name}</strong>
-          <p>Il gusto di casa, ogni giorno.</p>
+          <p>
+            {language === "en"
+              ? "The taste of home, every day."
+              : "Il gusto di casa, ogni giorno."}
+          </p>
         </div>
       </footer>
     </>
@@ -252,7 +296,9 @@ function MenuProduct({ item, language }: { item: MenuItem; language: "it" | "en"
         {ingredients && <p>{ingredients}</p>}
         {description && description !== ingredients && <p className="muted">{description}</p>}
         {item.allergens.length > 0 && (
-          <small>Allergeni: {item.allergens.join(", ")}</small>
+          <small>
+            {language === "en" ? "Allergens" : "Allergeni"}: {item.allergens.join(", ")}
+          </small>
         )}
       </div>
       <strong>{formatCurrency(item.price)}</strong>
@@ -260,13 +306,19 @@ function MenuProduct({ item, language }: { item: MenuItem; language: "it" | "en"
   );
 }
 
-function CategoryArtwork({ slug }: { slug: string }) {
+function CategoryArtwork({
+  slug,
+  language,
+}: {
+  slug: string;
+  language: "it" | "en";
+}) {
   if (slug === "antipasti") {
     return (
       <Image
         className="category-artwork category-artwork-antipasti"
         src="/images/la-sagretta-antipasti.png"
-        alt="Tagliere di antipasti della casa"
+        alt={language === "en" ? "House starter board" : "Tagliere di antipasti della casa"}
         width={1536}
         height={1024}
         sizes="(max-width: 700px) 70vw, 24rem"
@@ -279,7 +331,11 @@ function CategoryArtwork({ slug }: { slug: string }) {
       <Image
         className="category-artwork category-artwork-pinsa"
         src="/images/la-sagretta-pinsa.png"
-        alt="Pinsa rossa con mozzarella, pomodorini e basilico"
+        alt={
+          language === "en"
+            ? "Red pinsa with mozzarella, cherry tomatoes and basil"
+            : "Pinsa rossa con mozzarella, pomodorini e basilico"
+        }
         width={1536}
         height={1024}
         sizes="(max-width: 700px) 70vw, 23rem"

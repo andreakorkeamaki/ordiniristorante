@@ -111,6 +111,25 @@ describe("buildRaw80mmTicket", () => {
     expect(body).not.toContain("1.50");
   });
 
+  it("stampa una sola riga con la quantità totale per prodotti uguali", () => {
+    const repeatedItems: Order = {
+      ...order,
+      items: Array.from({ length: 4 }, (_, index) => ({
+        ...order.items![0],
+        id: `item-${index + 1}`,
+        quantity: 1,
+        line_total: 10,
+        notes: "",
+        extras: [],
+      })),
+    };
+
+    const body = buildRaw80mmTicket(repeatedItems, "new_order").toString("ascii");
+
+    expect(body).toContain("4x R Pinsa Margherita");
+    expect(body.match(/Pinsa Margherita/g)).toHaveLength(1);
+  });
+
   it("stampa nome e ora di ritiro senza tavolo o coperti per un asporto", () => {
     const takeaway: Order = {
       ...order,

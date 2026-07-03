@@ -317,10 +317,16 @@ export function AdminDashboard() {
   async function saveProduct(event: React.FormEvent<HTMLFormElement>, id: string) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
+    const current = items.find((item) => item.id === id);
+    const name = String(data.get("name"));
+    const ingredients = String(data.get("ingredients")) || null;
     await execute(() => createClient().from("menu_items").update({
-      name: String(data.get("name")),
+      name,
+      name_en: current && name === current.name ? current.name_en : null,
       price: Number(data.get("price")),
-      ingredients: String(data.get("ingredients")) || null,
+      ingredients,
+      ingredients_en:
+        current && ingredients === current.ingredients ? current.ingredients_en : null,
       preparation_area: String(data.get("preparation_area")) as PreparationArea,
       available: data.get("available") === "on",
       visible_public: data.get("visible_public") === "on",
@@ -356,6 +362,7 @@ export function AdminDashboard() {
   async function saveSettings(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
+    const allergenNotice = String(data.get("allergen_notice")) || null;
     await execute(() => createClient().from("restaurant_settings").update({
       restaurant_name: String(data.get("restaurant_name")),
       cover_charge: Number(data.get("cover_charge")),

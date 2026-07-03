@@ -263,7 +263,7 @@ const MENU = [
     name: "Formula All You Can Eat",
     shortName: "All You Can Eat",
     description:
-      "Da effettuare per tutto il tavolo. Include: antipastino misto della casa, pinsa romana non stop servita al tavolo a scelta dello chef, patatine fritte e pinsa con la Nutella.",
+      "Ordinabile per il numero di persone desiderato. Include: antipastino misto della casa, pinsa romana non stop servita al tavolo a scelta dello chef, patatine fritte e pinsa con la Nutella.",
     products: [
       {
         id: "all-you-can-eat-adulti",
@@ -506,36 +506,6 @@ function getTotals(order) {
   return { subtotal, cover, total: subtotal + cover };
 }
 
-function getAllYouCanEatStatus(order) {
-  const quantity = order.items
-    .filter((item) => !item.parentItemId && item.categoryId === "all-you-can-eat")
-    .reduce((sum, item) => sum + item.quantity, 0);
-  const active = quantity > 0;
-
-  return {
-    active,
-    quantity,
-    valid: !active || (order.covers > 0 && quantity === order.covers),
-  };
-}
-
-function getAllYouCanEatWarning(order, status) {
-  if (!status.active || status.valid) return "";
-  if (order.covers === 0) return "imposta prima il numero di coperti.";
-
-  if (status.quantity < order.covers) {
-    const missing = order.covers - status.quantity;
-    return missing === 1
-      ? "manca 1 formula per coprire tutti i coperti."
-      : `mancano ${missing} formule per coprire tutti i coperti.`;
-  }
-
-  const extra = status.quantity - order.covers;
-  return extra === 1
-    ? "c’è 1 formula in più rispetto ai coperti."
-    : `ci sono ${extra} formule in più rispetto ai coperti.`;
-}
-
 function formatPrice(value) {
   return new Intl.NumberFormat("it-IT", {
     style: "currency",
@@ -660,7 +630,6 @@ function renderOrder(tableId, { preserveScroll = false } = {}) {
   view = { ...view, name: "order", tableId };
   const category = MENU.find((entry) => entry.id === view.categoryId) || MENU[0];
   const totals = getTotals(order);
-  const allYouCanEat = getAllYouCanEatStatus(order);
   const mainItems = order.items.filter((item) => !item.parentItemId);
   const totalQuantity = mainItems.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -717,12 +686,6 @@ function renderOrder(tableId, { preserveScroll = false } = {}) {
         ${mainItems.length ? mainItems.map((item) => renderOrderItem(item, order)).join("") : '<div class="empty-order">La comanda è vuota.<br />Tocca un prodotto per aggiungerlo.</div>'}
       </div>
 
-      ${
-        allYouCanEat.active && !allYouCanEat.valid
-          ? `<div class="ready-general-note"><strong>Formula per tutto il tavolo:</strong> ${getAllYouCanEatWarning(order, allYouCanEat)}</div>`
-          : ""
-      }
-
       <label class="field-label general-note">
         Nota generale dell’ordine
         <textarea class="note-input" data-action="general-note" placeholder="Es. portare tutto insieme…">${escapeHtml(order.generalNote)}</textarea>
@@ -736,7 +699,7 @@ function renderOrder(tableId, { preserveScroll = false } = {}) {
 
       <div class="order-actions">
         <button class="button button-primary" type="button" data-action="save-order">Salva ordine</button>
-        <button class="button button-ready" type="button" data-action="mark-ready" ${mainItems.length && allYouCanEat.valid ? "" : "disabled"}>Segna pronto per cassa</button>
+        <button class="button button-ready" type="button" data-action="mark-ready" ${mainItems.length ? "" : "disabled"}>Segna pronto per cassa</button>
         <button class="button button-danger" type="button" data-action="clear-table" ${hasOrderContent(order) ? "" : "disabled"}>Svuota tavolo</button>
       </div>
     </section>
@@ -1134,10 +1097,6 @@ document.addEventListener("click", (event) => {
 
   if (action === "mark-ready") {
     const order = state.tables[view.tableId];
-    if (!getAllYouCanEatStatus(order).valid) {
-      showToast("La formula All You Can Eat deve comprendere tutti i coperti.");
-      return;
-    }
     order.status = "ready";
     saveState({ touchTableId: view.tableId });
     showToast(`Tavolo ${view.tableId} pronto per la cassa`);
