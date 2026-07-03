@@ -1,5 +1,6 @@
 import type { Order, PrintJobType } from "@/types/domain";
 import { getOrderLocationLabel } from "@/lib/order-display";
+import { aggregateIdenticalOrderItems } from "@/lib/order-items";
 
 export const PRINT_JOB_LABELS: Record<PrintJobType, string> = {
   new_order: "NUOVA COMANDA",
@@ -86,7 +87,7 @@ export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
     text("-".repeat(LINE_WIDTH)),
   ];
 
-  for (const item of order.items ?? []) {
+  for (const item of aggregateIdenticalOrderItems(order.items ?? [])) {
     const prefix = getPinsaPrintPrefix(item.category_slug);
     const itemName = prefix
       ? `${prefix} ${item.item_name_snapshot}`

@@ -6,6 +6,7 @@ import { PrintTicket } from "@/components/print-ticket";
 import { ServiceControl } from "@/components/service-control";
 import { formatCurrency, formatDateTime, formatTime } from "@/lib/format";
 import { getOrderLocationLabel, getOrderShortLabel } from "@/lib/order-display";
+import { aggregateIdenticalOrderItems } from "@/lib/order-items";
 import {
   canSafelyCancelPrintJob,
   getPrintJobDisplayState,
@@ -1086,7 +1087,7 @@ function OrderCard({
       </p>
       {printStatus && <p className="card-print-status">{printStatus}</p>}
       <ul>
-        {order.items?.map((item) => (
+        {aggregateIdenticalOrderItems(order.items ?? []).map((item) => (
           <li key={item.id}>
             <strong>{item.quantity}×</strong> {item.item_name_snapshot}
             {item.notes && <small>{item.notes}</small>}
