@@ -368,9 +368,7 @@ export function AdminDashboard() {
       cover_charge: Number(data.get("cover_charge")),
       dine_in_print_copies: Number(data.get("dine_in_print_copies")),
       takeaway_print_copies: Number(data.get("takeaway_print_copies")),
-      allergen_notice: allergenNotice,
-      allergen_notice_en:
-        allergenNotice === settings!.allergen_notice ? settings!.allergen_notice_en : null,
+      allergen_notice: String(data.get("allergen_notice")) || null,
       ticket_footer: String(data.get("ticket_footer")) || null,
     }).eq("id", settings!.id));
   }
