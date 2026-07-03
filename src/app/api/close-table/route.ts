@@ -67,12 +67,15 @@ export async function POST(request: Request) {
   let idempotent = false;
 
   try {
-    printNodeJobId = await createPrintNodeJob({
+    const submission = await createPrintNodeJob({
       title: `SCONTRINO #${order.order_number}`,
       content: buildRaw80mmReceipt(order),
       idempotencyKey: `${order.id}:receipt`,
       copies: 1,
+      source: `Appordini receipt:${order.id}`,
     });
+    printNodeJobId = submission.id;
+    idempotent = submission.recovered;
   } catch (error) {
     if (error instanceof PrintNodeIdempotencyError) {
       idempotent = true;

@@ -6,6 +6,12 @@ import { PrintTicket } from "@/components/print-ticket";
 import { ServiceControl } from "@/components/service-control";
 import { formatCurrency, formatDateTime, formatTime } from "@/lib/format";
 import { getOrderLocationLabel, getOrderShortLabel } from "@/lib/order-display";
+import {
+  canSafelyCancelPrintJob,
+  getPrintJobDisplayState,
+  getPrintJobStatusLabel,
+  getStaffPrintMessage,
+} from "@/lib/print-job-state";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentService } from "@/hooks/use-current-service";
 import type {
@@ -43,6 +49,21 @@ interface SelectedTicket {
   jobId?: string;
 }
 
+type PrintConfirmation =
+  | { kind: "manual"; order: Order; jobs: PrintJob[] }
+  | {
+      kind: "retry";
+      order: Order;
+      job: PrintJob;
+      actionKey: string;
+    }
+  | {
+      kind: "reprint";
+      order: Order;
+      job: PrintJob | null;
+      actionKey: string;
+    };
+
 export function CashierDashboard() {
   const { canWrite, blockReason, markUnreliable } = useConnection();
   const {
@@ -60,6 +81,13 @@ export function CashierDashboard() {
   const [settings, setSettings] = useState<RestaurantSettings | null>(null);
   const [message, setMessage] = useState("");
   const [closingOrderId, setClosingOrderId] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<PrintConfirmation | null>(null);
+  const [detailsJob, setDetailsJob] = useState<PrintJob | null>(null);
+  const [retryReason, setRetryReason] = useState(
+    "Ristampa forzata dopo verifica in cassa",
+  );
+  const [riskAccepted, setRiskAccepted] = useState(false);
+  const [busyJobId, setBusyJobId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -219,7 +247,13 @@ export function CashierDashboard() {
       jobFor(order.id, "new_order")?.status === "printed",
   );
   const queuedJobs = jobs.filter((job) =>
-    ["pending", "printing", "failed"].includes(job.status),
+    ["pending", "printing", "failed"].includes(job.status) &&
+    isCurrentServiceJob(job, orderById, service?.id),
+  );
+  const historicalFailures = jobs.filter(
+    (job) =>
+      job.status === "failed" &&
+      !isCurrentServiceJob(job, orderById, service?.id),
   );
 
   if (loading) return <div className="loader" aria-label="Caricamento cassa" />;
@@ -293,79 +327,147 @@ export function CashierDashboard() {
         <div className="print-job-list">
           {queuedJobs.length ? queuedJobs.map((job) => {
             const order = orderById.get(job.order_id);
-            const recoverable =
-              job.status === "failed" ||
-              (job.status === "pending" && isOlderThan(job.created_at, 30_000));
+            const displayState = getPrintJobDisplayState(job);
+            const staffMessage = getStaffPrintMessage(job);
+            const tableJobs = jobs.filter(
+              (candidate) =>
+                candidate.order_id === job.order_id &&
+                ["printing", "failed"].includes(candidate.status),
+            );
             return (
-              <article className={`print-job-row status-${job.status}`} key={job.id}>
+              <article
+                className={`print-job-row status-${displayState}`}
+                key={job.id}
+              >
                 <div>
-                  <strong>{JOB_LABELS[job.job_type]} · #{order?.order_number ?? "—"}</strong>
+                  <div className="print-job-title">
+                    <strong>
+                      {JOB_LABELS[job.job_type]} · #{order?.order_number ?? "—"}
+                    </strong>
+                    <span className={`print-status-badge status-${displayState}`}>
+                      {getPrintJobStatusLabel(job)}
+                    </span>
+                    {job.manually_confirmed && (
+                      <span className="print-status-badge is-manual">
+                        Confermato manualmente
+                      </span>
+                    )}
+                  </div>
                   <p>
                     {order ? getOrderShortLabel(order) : "Ordine —"} · {job.copies}{" "}
-                    {job.copies === 1 ? "copia" : "copie"} · {printStatusLabel(job)}
+                    {job.copies === 1 ? "copia" : "copie"}
                     {job.printnode_job_id ? ` · PrintNode #${job.printnode_job_id}` : ""}
+                    {job.last_attempt_at
+                      ? ` · ultimo tentativo ${formatDateTime(job.last_attempt_at)}`
+                      : ""}
                   </p>
-                  {job.error_message && <small>{job.error_message}</small>}
+                  {staffMessage && <small>{staffMessage}</small>}
                 </div>
                 <div className="print-job-actions">
-                  {recoverable && order && (
+                  {job.status === "pending" && order && (
                     <button
-                      disabled={!canWrite}
+                      disabled={!canWrite || busyJobId === job.id}
                       onClick={() => void dispatchPrint(order, job.job_type)}
                     >
-                      {job.status === "failed" ? "Riprova" : "Recupera stampa"}
+                      Avvia stampa
                     </button>
                   )}
-                  {job.status === "printing" && <button disabled>In invio…</button>}
-                  {order && (
+                  {["printing", "failed"].includes(job.status) && order && (
+                    <>
+                      <button
+                        disabled={!canWrite || busyJobId !== null}
+                        onClick={() => openManualConfirmation(order, [job])}
+                      >
+                        Segna come stampata
+                      </button>
+                      <button
+                        className="button-warning"
+                        disabled={!canWrite || busyJobId !== null}
+                        onClick={() => openRetryConfirmation(order, job)}
+                      >
+                        Riprova stampa
+                      </button>
+                    </>
+                  )}
+                  {tableJobs.length > 1 && order && (
                     <button
-                      className="button-primary"
-                      disabled={
-                        !canWrite ||
-                        job.status === "printing" ||
-                        (job.status === "pending" && Boolean(printer?.available))
-                      }
-                      onClick={() => setSelected({ order, type: job.job_type, jobId: job.id })}
+                      disabled={!canWrite || busyJobId !== null}
+                      onClick={() => openManualConfirmation(order, tableJobs)}
                     >
-                      Fallback manuale
+                      Completa stampe tavolo
                     </button>
                   )}
+                  {canSafelyCancelPrintJob(job) && (
+                    <button
+                      className="button-danger"
+                      disabled={!canWrite || busyJobId !== null}
+                      onClick={() => void cancelQueuedPrintJob(job)}
+                    >
+                      Annulla job
+                    </button>
+                  )}
+                  <button onClick={() => setDetailsJob(job)}>
+                    Dettagli stampa
+                  </button>
                 </div>
               </article>
             );
-          }) : <p className="column-empty">Nessun job in attesa o fallito</p>}
+          }) : <p className="column-empty">Nessun job operativo da gestire</p>}
         </div>
       </section>
+
+      {historicalFailures.length > 0 && (
+        <details className="historical-print-jobs">
+          <summary>
+            Stampe fallite di servizi precedenti ({historicalFailures.length})
+          </summary>
+          <div className="print-job-list">
+            {historicalFailures.map((job) => {
+              const order = orderById.get(job.order_id);
+              return (
+                <button
+                  className="historical-print-row"
+                  key={job.id}
+                  onClick={() => setDetailsJob(job)}
+                >
+                  <span>
+                    {JOB_LABELS[job.job_type]} · #{order?.order_number ?? "—"}
+                  </span>
+                  <span>{formatDateTime(job.last_attempt_at ?? job.created_at)}</span>
+                  <span>Apri dettagli</span>
+                </button>
+              );
+            })}
+          </div>
+        </details>
+      )}
 
       <div className="cashier-board">
         <CashierColumn title="Nuove comande" count={newOrders.length}>
           {newOrders.map((order) => {
             const job = jobFor(order.id, "new_order");
-            const recoverable =
-              job?.status === "failed" ||
-              (job?.status === "pending" && isOlderThan(job.created_at, 30_000));
+            const needsStaffCheck =
+              job && ["printing", "failed"].includes(job.status);
             return (
               <OrderCard
                 order={order}
                 key={order.id}
                 printStatus={job ? printStatusLabel(job) : "Stampa in preparazione"}
                 actions={
-                  recoverable && job ? (
+                  needsStaffCheck && job ? (
                     <>
                       <button
                         disabled={!canWrite}
-                        onClick={() => void dispatchPrint(order, "new_order")}
+                        onClick={() => openManualConfirmation(order, [job])}
                       >
-                        Riprova stampa
+                        Segna come stampata
                       </button>
                       <button
-                        className="button-primary"
+                        className="button-warning"
                         disabled={!canWrite}
-                        onClick={() =>
-                          setSelected({ order, type: "new_order", jobId: job.id })
-                        }
+                        onClick={() => openRetryConfirmation(order, job)}
                       >
-                        Fallback manuale
+                        Riprova stampa
                       </button>
                     </>
                   ) : null
@@ -375,24 +477,48 @@ export function CashierDashboard() {
           })}
         </CashierColumn>
         <CashierColumn title="In attesa di stampa" count={waitingPrint.length}>
-          {waitingPrint.map((order) => (
-            <OrderCard
-              order={order}
-              key={order.id}
-              actions={
-                <>
-                  <button onClick={() => openPreview(order, "new_order")}>Apri preview</button>
-                  <button
-                    className="button-primary"
-                    disabled={!canWrite}
-                    onClick={() => void dispatchPrint(order, "new_order")}
-                  >
-                    Stampa
-                  </button>
-                </>
-              }
-            />
-          ))}
+          {waitingPrint.map((order) => {
+            const job = jobFor(order.id, "new_order");
+            return (
+              <OrderCard
+                order={order}
+                key={order.id}
+                printStatus={job ? printStatusLabel(job) : undefined}
+                actions={
+                  <>
+                    <button onClick={() => openPreview(order, "new_order")}>
+                      Apri preview
+                    </button>
+                    {job && ["printing", "failed"].includes(job.status) ? (
+                      <>
+                        <button
+                          disabled={!canWrite}
+                          onClick={() => openManualConfirmation(order, [job])}
+                        >
+                          Segna come stampata
+                        </button>
+                        <button
+                          className="button-warning"
+                          disabled={!canWrite}
+                          onClick={() => openRetryConfirmation(order, job)}
+                        >
+                          Riprova stampa
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="button-primary"
+                        disabled={!canWrite}
+                        onClick={() => void dispatchPrint(order, "new_order")}
+                      >
+                        Stampa
+                      </button>
+                    )}
+                  </>
+                }
+              />
+            );
+          })}
         </CashierColumn>
         <CashierColumn title="Lavorazione / conto" count={preparing.length}>
           {preparing.map((order) => (
@@ -401,7 +527,12 @@ export function CashierDashboard() {
               key={order.id}
               actions={
                 <>
-                  <button disabled={!canWrite} onClick={() => void dispatchPrint(order, "reprint")}>Ristampa</button>
+                  <button
+                    disabled={!canWrite}
+                    onClick={() => openReprintConfirmation(order)}
+                  >
+                    Ristampa
+                  </button>
                   <button
                     className="button-primary"
                     disabled={!canWrite || closingOrderId !== null}
@@ -465,13 +596,22 @@ export function CashierDashboard() {
               <button className="button button-secondary" disabled={!canWrite} onClick={() => window.print()}>
                 Stampa dal browser
               </button>
-              {selected.jobId && jobFor(selected.order.id, selected.type)?.status !== "printing" && (
+              {selected.jobId &&
+                ["pending", "printing", "failed"].includes(
+                  jobFor(selected.order.id, selected.type)?.status ?? "",
+                ) && (
                 <button
                   className="button button-primary"
                   disabled={!canWrite}
-                  onClick={() => void completeManualFallback(selected.jobId!)}
+                  onClick={() => {
+                    const job = jobFor(selected.order.id, selected.type);
+                    if (job) {
+                      setSelected(null);
+                      openManualConfirmation(selected.order, [job]);
+                    }
+                  }}
                 >
-                  Segna fallback completato
+                  Segna come stampata
                 </button>
               )}
               {!["closed", "cancelled"].includes(selected.order.status) && (
@@ -484,6 +624,170 @@ export function CashierDashboard() {
                 </button>
               )}
             </div>
+          </section>
+        </div>
+      )}
+
+      {confirmation?.kind === "manual" && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <section className="print-confirmation-modal">
+            <p className="eyebrow">Conferma manuale</p>
+            <h2>
+              {confirmation.jobs.length > 1
+                ? `Completa ${confirmation.jobs.length} stampe del tavolo`
+                : "Segna come stampata"}
+            </h2>
+            <p className="confirmation-warning">
+              Usa questa azione solo se il foglio è già uscito fisicamente dalla
+              stampante. Non verrà inviata nessuna nuova stampa.
+            </p>
+            <ul className="confirmation-job-list">
+              {confirmation.jobs.map((job) => (
+                <li key={job.id}>
+                  <strong>{JOB_LABELS[job.job_type]}</strong>
+                  <span>
+                    {getPrintJobStatusLabel(job)}
+                    {job.printnode_job_id
+                      ? ` · PrintNode #${job.printnode_job_id}`
+                      : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <div className="modal-actions">
+              <button
+                className="button button-secondary"
+                disabled={busyJobId !== null}
+                onClick={closePrintConfirmation}
+              >
+                Torna indietro
+              </button>
+              <button
+                className="button button-primary"
+                disabled={!canWrite || busyJobId !== null}
+                onClick={() => void confirmPrintedManually(confirmation)}
+              >
+                Confermo: i fogli sono usciti
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {(confirmation?.kind === "retry" ||
+        confirmation?.kind === "reprint") && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <section className="print-confirmation-modal">
+            <p className="eyebrow">Ristampa consapevole</p>
+            <h2>
+              {confirmation.kind === "retry"
+                ? "Riprova stampa"
+                : "Crea una ristampa"}
+            </h2>
+            <p className="confirmation-warning">
+              La stampa originale potrebbe essere già uscita. Continuando puoi
+              produrre un doppione; verrà creato un nuovo tentativo collegato e
+              tracciato.
+            </p>
+            {confirmation.job && (
+              <dl className="print-details">
+                <div>
+                  <dt>Job originale</dt>
+                  <dd>{JOB_LABELS[confirmation.job.job_type]}</dd>
+                </div>
+                <div>
+                  <dt>Stato</dt>
+                  <dd>{getPrintJobStatusLabel(confirmation.job)}</dd>
+                </div>
+                <div>
+                  <dt>Ultimo tentativo</dt>
+                  <dd>
+                    {formatDateTime(
+                      confirmation.job.last_attempt_at ??
+                        confirmation.job.created_at,
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt>PrintNode</dt>
+                  <dd>{confirmation.job.printnode_job_id ?? "non registrato"}</dd>
+                </div>
+              </dl>
+            )}
+            <label className="retry-reason">
+              Motivo
+              <textarea
+                value={retryReason}
+                maxLength={500}
+                onChange={(event) => setRetryReason(event.target.value)}
+              />
+            </label>
+            <label className="risk-confirmation">
+              <input
+                type="checkbox"
+                checked={riskAccepted}
+                onChange={(event) => setRiskAccepted(event.target.checked)}
+              />
+              Ho verificato la stampante e accetto il rischio di un doppione.
+            </label>
+            <div className="modal-actions">
+              <button
+                className="button button-secondary"
+                disabled={busyJobId !== null}
+                onClick={closePrintConfirmation}
+              >
+                Annulla
+              </button>
+              <button
+                className="button button-danger"
+                disabled={
+                  !canWrite ||
+                  !riskAccepted ||
+                  !retryReason.trim() ||
+                  busyJobId !== null
+                }
+                onClick={() => void confirmRetryOrReprint(confirmation)}
+              >
+                Confermo il rischio e ristampa
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {detailsJob && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <section className="print-confirmation-modal">
+            <div className="modal-heading">
+              <div>
+                <p className="eyebrow">Dettagli tecnici</p>
+                <h2>{JOB_LABELS[detailsJob.job_type]}</h2>
+              </div>
+              <button className="text-button" onClick={() => setDetailsJob(null)}>
+                Chiudi
+              </button>
+            </div>
+            <dl className="print-details">
+              <div><dt>Stato</dt><dd>{getPrintJobStatusLabel(detailsJob)}</dd></div>
+              <div><dt>Tentativo</dt><dd>{detailsJob.attempt_number}</dd></div>
+              <div><dt>Ultimo tentativo</dt><dd>{formatOptionalDate(detailsJob.last_attempt_at)}</dd></div>
+              <div><dt>Invio accettato</dt><dd>{formatOptionalDate(detailsJob.submitted_at)}</dd></div>
+              <div><dt>PrintNode job</dt><dd>{detailsJob.printnode_job_id ?? "—"}</dd></div>
+              <div><dt>Ultimo stato PrintNode</dt><dd>{detailsJob.last_printnode_state ?? "—"}</dd></div>
+              <div><dt>Ultimo controllo</dt><dd>{formatOptionalDate(detailsJob.last_state_checked_at)}</dd></div>
+              <div><dt>Conferma manuale</dt><dd>{detailsJob.manually_confirmed ? "Sì" : "No"}</dd></div>
+            </dl>
+            {detailsJob.manual_confirmation_note && (
+              <p className="print-detail-note">
+                <strong>Nota manuale:</strong> {detailsJob.manual_confirmation_note}
+              </p>
+            )}
+            {detailsJob.technical_error && (
+              <details className="technical-error">
+                <summary>Errore tecnico</summary>
+                <code>{detailsJob.technical_error}</code>
+              </details>
+            )}
           </section>
         </div>
       )}
@@ -550,50 +854,186 @@ export function CashierDashboard() {
     await dispatchPrint(order, "cancellation");
   }
 
-  async function dispatchPrint(order: Order, type: PrintJobType) {
+  async function dispatchPrint(
+    order: Order,
+    type: PrintJobType,
+    options?: {
+      operation?: "dispatch" | "retry";
+      jobId?: string;
+      actionKey?: string;
+      reason?: string;
+    },
+  ) {
     if (!canWrite) return;
+    setBusyJobId(options?.jobId ?? order.id);
     try {
       const response = await fetch("/api/print-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderId: order.id, type }),
+        body: JSON.stringify({ orderId: order.id, type, ...options }),
       });
       const payload = (await response.json()) as {
         error?: string;
+        message?: string;
         idempotent?: boolean;
-        fallback?: "manual";
+        outcome?:
+          | "submitted"
+          | "printed"
+          | "already_submitted"
+          | "accepted_state_pending"
+          | "verification_required"
+          | "failed"
+          | "retry_required";
       };
 
-      if (!response.ok) {
-        setMessage(`${payload.error ?? "Stampa non riuscita"} · usa il fallback manuale`);
-        openPreview(order, type);
+      if (!response.ok && response.status !== 202) {
+        setMessage(
+          payload.error ??
+            "Stampa non riuscita. Controlla i dettagli del job prima di riprovare.",
+        );
+      } else if (
+        response.status === 202 ||
+        ["accepted_state_pending", "verification_required"].includes(
+          payload.outcome ?? "",
+        )
+      ) {
+        setMessage(
+          payload.message ??
+            payload.error ??
+            "Stampa già presa in carico: verifica il foglio, senza inviare di nuovo.",
+        );
       } else {
         setMessage(
-          payload.idempotent
-            ? `${JOB_LABELS[type]} già presa in carico`
-            : `${JOB_LABELS[type]} inviata a PrintNode`,
+          payload.outcome === "printed"
+            ? `${JOB_LABELS[type]} completata`
+            : payload.idempotent
+              ? `${JOB_LABELS[type]} già presa in carico: nessun doppio invio`
+              : `${JOB_LABELS[type]} accettata da PrintNode`,
         );
       }
     } catch {
       markUnreliable();
-      setMessage("Connessione non affidabile. Stampa non confermata.");
+      setMessage(
+        "Connessione non affidabile. Non ristampare subito: verifica prima il foglio.",
+      );
+    } finally {
+      setBusyJobId(null);
     }
     await load();
     await refreshPrinter();
   }
 
-  async function completeManualFallback(jobId: string) {
-    if (!canWrite) return;
-    const { error } = await createClient().rpc("mark_print_job_manual", {
-      p_job_id: jobId,
+  function openManualConfirmation(order: Order, targetJobs: PrintJob[]) {
+    setConfirmation({ kind: "manual", order, jobs: targetJobs });
+  }
+
+  function openRetryConfirmation(order: Order, job: PrintJob) {
+    setRetryReason("Ristampa forzata dopo verifica in cassa");
+    setRiskAccepted(false);
+    setConfirmation({
+      kind: "retry",
+      order,
+      job,
+      actionKey: crypto.randomUUID(),
     });
+  }
+
+  function openReprintConfirmation(order: Order) {
+    const sourceJob =
+      jobs.find(
+        (job) =>
+          job.order_id === order.id &&
+          job.job_type === "new_order" &&
+          job.status === "printed",
+      ) ?? null;
+    setRetryReason("Ristampa richiesta dalla cassa");
+    setRiskAccepted(false);
+    setConfirmation({
+      kind: "reprint",
+      order,
+      job: sourceJob,
+      actionKey: crypto.randomUUID(),
+    });
+  }
+
+  function closePrintConfirmation() {
+    setConfirmation(null);
+    setRiskAccepted(false);
+  }
+
+  async function confirmPrintedManually(
+    target: Extract<PrintConfirmation, { kind: "manual" }>,
+  ) {
+    if (!canWrite) return;
+    const note =
+      "Confermato manualmente dalla cassa perché stampato fisicamente ma stato non aggiornato";
+    setBusyJobId(target.jobs[0]?.id ?? target.order.id);
+    const supabase = createClient();
+    const result =
+      target.jobs.length === 1
+        ? await supabase.rpc("confirm_print_job_manual", {
+            p_job_id: target.jobs[0].id,
+            p_note: note,
+          })
+        : await supabase.rpc("confirm_table_print_jobs", {
+            p_order_id: target.order.id,
+            p_job_ids: target.jobs.map((job) => job.id),
+            p_note: note,
+          });
+    const { error } = result;
+    if (error) {
+      if (!error.code) markUnreliable();
+      setMessage(error.message);
+      setBusyJobId(null);
+      return;
+    }
+    closePrintConfirmation();
+    setBusyJobId(null);
+    setMessage(
+      target.jobs.length === 1
+        ? "Stampa confermata manualmente. Nessun nuovo invio eseguito."
+        : `${target.jobs.length} stampe del tavolo confermate manualmente.`,
+    );
+    await load();
+  }
+
+  async function confirmRetryOrReprint(
+    target: Extract<PrintConfirmation, { kind: "retry" | "reprint" }>,
+  ) {
+    if (!riskAccepted || !retryReason.trim()) return;
+    closePrintConfirmation();
+    await dispatchPrint(
+      target.order,
+      "reprint",
+      target.kind === "retry"
+        ? {
+            operation: "retry",
+            jobId: target.job.id,
+            actionKey: target.actionKey,
+            reason: retryReason.trim(),
+          }
+        : {
+            operation: "dispatch",
+            actionKey: target.actionKey,
+            reason: retryReason.trim(),
+          },
+    );
+  }
+
+  async function cancelQueuedPrintJob(job: PrintJob) {
+    if (!canWrite || !canSafelyCancelPrintJob(job)) return;
+    setBusyJobId(job.id);
+    const { error } = await createClient().rpc("cancel_print_job", {
+      p_job_id: job.id,
+      p_note: "Job annullato dalla cassa prima dell’invio",
+    });
+    setBusyJobId(null);
     if (error) {
       if (!error.code) markUnreliable();
       setMessage(error.message);
       return;
     }
-    setSelected(null);
-    setMessage("Fallback manuale registrato");
+    setMessage("Job annullato senza inviare alcuna stampa.");
     await load();
   }
 }
@@ -665,26 +1105,24 @@ function OrderCard({
   );
 }
 
-function isOlderThan(value: string, milliseconds: number) {
-  return Date.now() - new Date(value).getTime() > milliseconds;
-}
-
 function printStatusLabel(job: PrintJob) {
   const label = JOB_LABELS[job.job_type];
-  if (job.status === "printed") return `${label} — stampata`;
-  if (job.status === "failed") return `${label} — ERRORE STAMPA · DA STAMPARE`;
-  if (
-    job.status === "printing" &&
-    job.error_message?.toLowerCase().includes("incerto")
-  ) {
-    return `${label} — esito stampa incerto`;
-  }
-  if (job.status === "printing") return `${label} — in stampa`;
-  if (job.status === "pending" && isOlderThan(job.created_at, 30_000)) {
-    return `${label} — errore avvio stampa`;
-  }
-  if (job.status === "pending") return `${label} — stampa avviata`;
-  return `${label} — stampa annullata`;
+  return `${label} — ${getPrintJobStatusLabel(job).toLowerCase()}`;
+}
+
+function isCurrentServiceJob(
+  job: PrintJob,
+  orderById: Map<string, Order>,
+  currentServiceId?: string,
+) {
+  const order = orderById.get(job.order_id);
+  if (!order) return false;
+  if (currentServiceId) return order.service_id === currentServiceId;
+  return ACTIVE.includes(order.status);
+}
+
+function formatOptionalDate(value: string | null) {
+  return value ? formatDateTime(value) : "—";
 }
 
 function getPreviewCopies(

@@ -1,5 +1,5 @@
 begin;
-select plan(92);
+select plan(109);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -53,6 +53,12 @@ select has_function(
   array['uuid'],
   'extra removal RPC exists'
 );
+select has_column('public', 'print_jobs', 'manually_confirmed', 'manual confirmation is persisted');
+select has_column('public', 'print_jobs', 'manual_confirmed_at', 'manual confirmation has a timestamp');
+select has_column('public', 'print_jobs', 'verification_required_at', 'uncertain jobs persist verification state');
+select has_column('public', 'print_jobs', 'last_printnode_state', 'the latest PrintNode state is persisted');
+select has_column('public', 'print_jobs', 'retry_of_job_id', 'retry attempts keep their parent job');
+select has_column('public', 'print_jobs', 'attempt_number', 'retry attempts are numbered');
 select fk_ok(
   'public',
   'orders',
@@ -102,6 +108,34 @@ select policies_are(
 );
 select function_returns('public', 'send_order_to_cashier', array['uuid'], 'orders', 'send RPC returns order');
 select function_returns('public', 'change_order_item_quantity', array['uuid', 'integer'], 'order_items', 'quantity RPC returns item');
+select function_returns(
+  'public',
+  'request_print_retry',
+  array['uuid', 'uuid', 'text'],
+  'print_jobs',
+  'retry RPC returns the linked print job'
+);
+select function_returns(
+  'public',
+  'confirm_print_job_manual',
+  array['uuid', 'text'],
+  'print_jobs',
+  'manual confirmation RPC returns the print job'
+);
+select function_returns(
+  'public',
+  'confirm_table_print_jobs',
+  array['uuid', 'uuid[]', 'text'],
+  'integer',
+  'table confirmation RPC returns the completed count'
+);
+select function_returns(
+  'public',
+  'cancel_print_job',
+  array['uuid', 'text'],
+  'print_jobs',
+  'safe cancellation RPC returns the print job'
+);
 
 insert into auth.users (
   id,
@@ -571,6 +605,17 @@ select lives_ok(
   $$,
   'the cashier can complete the initial print'
 );
+select ok(
+  (
+    select manually_confirmed
+      and manual_confirmed_at is not null
+      and manual_confirmed_by = '00000000-0000-4000-9000-000000009901'
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and job_type = 'new_order'
+  ),
+  'manual completion stores actor and timestamp'
+);
 
 update public.profiles
 set role = 'waiter'
@@ -630,6 +675,101 @@ reset role;
 update public.profiles
 set role = 'cashier'
 where id = '00000000-0000-4000-9000-000000009901';
+
+update public.print_jobs
+set status = 'printing',
+    processing_started_at = now() - interval '3 minutes',
+    last_attempt_at = now() - interval '3 minutes'
+where id = (
+  select id
+  from public.print_jobs
+  where order_id = '00000000-0000-4000-9000-000000009921'
+    and job_type = 'order_update'
+  order by created_at desc
+  limit 1
+);
+
+select lives_ok(
+  $$select public.flag_stale_print_jobs(2)$$,
+  'stale printing jobs can be flagged without being resent'
+);
+select ok(
+  (
+    select verification_required_at is not null
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and job_type = 'order_update'
+    order by created_at desc
+    limit 1
+  ),
+  'stale jobs persist the verification-required timestamp'
+);
+
+update public.print_jobs
+set status = 'failed'
+where id = (
+  select id
+  from public.print_jobs
+  where order_id = '00000000-0000-4000-9000-000000009921'
+    and job_type = 'order_update'
+  order by created_at desc
+  limit 1
+);
+
+select lives_ok(
+  $$
+    select public.request_print_retry(
+      (
+        select id
+        from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009921'
+          and job_type = 'order_update'
+        order by created_at desc
+        limit 1
+      ),
+      '00000000-0000-4000-9000-000000009931',
+      'Verifica retry test'
+    )
+  $$,
+  'a cashier can create a linked retry attempt'
+);
+select lives_ok(
+  $$
+    select public.request_print_retry(
+      (
+        select id
+        from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009921'
+          and job_type = 'order_update'
+        order by created_at desc
+        limit 1
+      ),
+      '00000000-0000-4000-9000-000000009931',
+      'Verifica retry test'
+    )
+  $$,
+  'the same retry action key returns the existing attempt'
+);
+select is(
+  (
+    select count(*)::integer
+    from public.print_jobs
+    where idempotency_key =
+      '00000000-0000-4000-9000-000000009921:reprint:00000000-0000-4000-9000-000000009931'
+  ),
+  1,
+  'a double click creates only one retry attempt'
+);
+select is(
+  (
+    select attempt_number
+    from public.print_jobs
+    where idempotency_key =
+      '00000000-0000-4000-9000-000000009921:reprint:00000000-0000-4000-9000-000000009931'
+  ),
+  2,
+  'the linked retry increments the attempt number'
+);
 
 select lives_ok(
   $$
@@ -701,9 +841,10 @@ select is(
     from public.print_jobs
     where order_id = '00000000-0000-4000-9000-000000009921'
       and job_type = 'reprint'
+      and retry_of_job_id is null
   ),
   1,
-  'only one reprint job exists for the order'
+  'only one explicit reprint exists for the repeated action'
 );
 
 update public.profiles

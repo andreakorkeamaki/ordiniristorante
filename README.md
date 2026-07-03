@@ -147,8 +147,9 @@ Il recupero password parte da `/staff/forgot-password` e termina su `/staff/rese
 - Totali, snapshot e audit sono calcolati nel database.
 - il passaggio `draft → pending_cashier` (submitted) crea una sola stampa
   `new_order` pending nella stessa transazione;
-- `new_order`, `order_update`, `cancellation` e `reprint` hanno chiavi
-  idempotenti separate per ordine e tipo.
+- `new_order` e `cancellation` hanno una chiave stabile per l’azione originale;
+  aggiornamenti e ristampe hanno una chiave stabile per il singolo tentativo
+  tracciato. Un doppio click recupera lo stesso job invece di crearne un altro.
 
 ## Stampa
 
@@ -164,11 +165,19 @@ La cassa offre:
 - preview da 80 mm con il numero di copie salvato nel job;
 - ticket distinti per nuovo ordine, aggiornamento, annullamento e ristampa;
 - etichetta `RISTAMPA` sulle ristampe;
-- fallback “Stampa dal browser” con registrazione manuale del completamento.
+- badge `In attesa`, `In stampa`, `Stampata`, `Errore` e `Da verificare`;
+- conferma manuale auditata per singolo job o per tutte le stampe del tavolo;
+- retry esplicito con avviso doppione, motivo, operatore e tentativo collegato;
+- dettagli tecnici separati dal messaggio operativo mostrato allo staff.
 
 Il client PrintNode deve essere installato e connesso sul Dell e la stampante
 termica deve accettare job RAW ESC/POS. Se PrintNode, Dell o stampante non sono
 disponibili, il job passa a `failed` e resta stampabile manualmente dalla cassa.
+Se PrintNode accetta il job ma il database o la rete non confermano
+l’aggiornamento, il job resta `printing` e passa a `Da verificare`: non viene
+ristampato automaticamente. Lo stato `done` di PrintNode significa che il job è
+stato consegnato alla coda del sistema operativo, non che il foglio sia
+fisicamente uscito; per questo la cassa mantiene sempre la conferma manuale.
 
 ## Verifiche
 

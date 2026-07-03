@@ -76,7 +76,7 @@ describe("POST /api/close-table", () => {
       message: "Stampante online",
       printer: {},
     });
-    mocks.createPrintNodeJob.mockResolvedValue(321);
+    mocks.createPrintNodeJob.mockResolvedValue({ id: 321, recovered: false });
     rpc.mockResolvedValue({ error: null });
   });
 

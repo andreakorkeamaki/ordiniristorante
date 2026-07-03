@@ -40,4 +40,15 @@ describe("buildPrintNodePayload", () => {
 
     expect(payload.qty).toBe(2);
   });
+
+  it("salva nel source l'identità locale usata per recuperare una collisione", () => {
+    const payload = buildPrintNodePayload({
+      printerId: 123,
+      title: "NUOVA COMANDA #42",
+      content: Buffer.from("ticket"),
+      source: "Appordini print_job:local-job",
+    });
+
+    expect(payload.source).toBe("Appordini print_job:local-job");
+  });
 });
