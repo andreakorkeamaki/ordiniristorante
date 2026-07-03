@@ -11,6 +11,7 @@ export type PrintStatus = "pending" | "printing" | "printed" | "failed" | "cance
 export type PrintJobType = "new_order" | "order_update" | "cancellation" | "reprint";
 export type PreparationArea = "pizzeria" | "cucina" | "bar" | "cassa";
 export type ServicePeriod = "pranzo" | "cena" | "recupero";
+export type OrderType = "dine_in" | "takeaway";
 
 export interface Profile {
   id: string;
@@ -23,7 +24,8 @@ export interface RestaurantSettings {
   id: string;
   restaurant_name: string;
   cover_charge: number;
-  default_print_copies: number;
+  dine_in_print_copies: number;
+  takeaway_print_copies: number;
   allergen_notice: string | null;
   ticket_footer: string | null;
 }
@@ -117,8 +119,11 @@ export interface OrderItem {
 export interface Order {
   id: string;
   order_number: number;
-  table_id: string;
+  table_id: string | null;
   service_id: string | null;
+  order_type: OrderType;
+  takeaway_name: string | null;
+  takeaway_pickup_at: string | null;
   status: OrderStatus;
   cover_count: number;
   cover_price_snapshot: number;

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useConnection } from "@/components/connection-provider";
 import { PrintTicket } from "@/components/print-ticket";
 import { ServiceControl } from "@/components/service-control";
-import { formatCurrency, formatDateTime } from "@/lib/format";
+import { formatCurrency, formatDateTime, formatTime } from "@/lib/format";
+import { getOrderLocationLabel, getOrderShortLabel } from "@/lib/order-display";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentService } from "@/hooks/use-current-service";
 import type {
@@ -13,6 +14,7 @@ import type {
   PrintJob,
   PrintJobType,
   Profile,
+  RestaurantSettings,
   RestaurantTable,
 } from "@/types/domain";
 
@@ -55,13 +57,14 @@ export function CashierDashboard() {
   const [waiterFilter, setWaiterFilter] = useState("");
   const [selected, setSelected] = useState<SelectedTicket | null>(null);
   const [printer, setPrinter] = useState<PrinterStatus | null>(null);
+  const [settings, setSettings] = useState<RestaurantSettings | null>(null);
   const [message, setMessage] = useState("");
   const [closingOrderId, setClosingOrderId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     const supabase = createClient();
-    const [activeOrdersResult, tablesResult, profilesResult, jobsResult] = await Promise.all([
+    const [activeOrdersResult, tablesResult, profilesResult, jobsResult, settingsResult] = await Promise.all([
       supabase.from("orders").select("*").in("status", ACTIVE).order("created_at"),
       supabase.from("restaurant_tables").select("*"),
       supabase.from("profiles").select("id, full_name, role, active"),
@@ -70,12 +73,14 @@ export function CashierDashboard() {
         .select("*")
         .order("created_at", { ascending: false })
         .limit(200),
+      supabase.from("restaurant_settings").select("*").limit(1).maybeSingle(),
     ]);
     const firstError =
       activeOrdersResult.error ??
       tablesResult.error ??
       profilesResult.error ??
-      jobsResult.error;
+      jobsResult.error ??
+      settingsResult.error;
     if (firstError) {
       if (!firstError.code) markUnreliable();
       setLoading(false);
@@ -122,12 +127,13 @@ export function CashierDashboard() {
     setOrders(
       rawOrders.map((order) => ({
         ...order,
-        table: tables.get(order.table_id),
+        table: order.table_id ? tables.get(order.table_id) : undefined,
         waiter: profiles.get(order.created_by),
         items: lines.filter((line) => line.order_id === order.id),
       })),
     );
     setJobs(rawJobs);
+    setSettings(settingsResult.data as RestaurantSettings | null);
     setLoading(false);
   }, [markUnreliable]);
 
@@ -182,7 +188,8 @@ export function CashierDashboard() {
         const tableMatches =
           !filter ||
           String(order.table?.table_number ?? "").includes(filter) ||
-          String(order.order_number).includes(filter);
+          String(order.order_number).includes(filter) ||
+          String(order.takeaway_name ?? "").toLowerCase().includes(filter.toLowerCase());
         const waiterMatches = !waiterFilter || order.created_by === waiterFilter;
         return tableMatches && waiterMatches;
       }),
@@ -227,7 +234,7 @@ export function CashierDashboard() {
         </div>
         <div className="cashier-filters">
           <input
-            placeholder="Tavolo o comanda"
+            placeholder="Tavolo, asporto o comanda"
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
           />
@@ -294,7 +301,8 @@ export function CashierDashboard() {
                 <div>
                   <strong>{JOB_LABELS[job.job_type]} · #{order?.order_number ?? "—"}</strong>
                   <p>
-                    Tavolo {order?.table?.table_number ?? "—"} · 3 copie · {printStatusLabel(job)}
+                    {order ? getOrderShortLabel(order) : "Ordine —"} · {job.copies}{" "}
+                    {job.copies === 1 ? "copia" : "copie"} · {printStatusLabel(job)}
                     {job.printnode_job_id ? ` · PrintNode #${job.printnode_job_id}` : ""}
                   </p>
                   {job.error_message && <small>{job.error_message}</small>}
@@ -399,21 +407,29 @@ export function CashierDashboard() {
                     disabled={!canWrite || closingOrderId !== null}
                     onClick={() => void closeTableAndPrint(order)}
                   >
-                    {closingOrderId === order.id ? "Stampa e chiude…" : "Chiudi tavolo"}
+                    {closingOrderId === order.id
+                      ? "Stampa e chiude…"
+                      : order.order_type === "takeaway"
+                        ? "Chiudi asporto"
+                        : "Chiudi tavolo"}
                   </button>
                 </>
               }
             />
           ))}
         </CashierColumn>
-        <CashierColumn title="Tavoli attivi" count={filtered.length}>
+        <CashierColumn title="Ordini attivi" count={filtered.length}>
           {filtered.map((order) => (
             <button
               className="active-table-row"
               key={order.id}
               onClick={() => openPreview(order, "new_order")}
             >
-              <strong>T{order.table?.table_number}</strong>
+              <strong>
+                {order.order_type === "takeaway"
+                  ? `A · ${order.takeaway_name ?? "Cliente"}`
+                  : `T${order.table?.table_number}`}
+              </strong>
               <span>#{order.order_number}</span>
               <span>{formatCurrency(order.total)}</span>
             </button>
@@ -437,7 +453,7 @@ export function CashierDashboard() {
               </p>
             )}
             <div className="ticket-preview print-area">
-              {Array.from({ length: 3 }, (_, index) => (
+              {Array.from({ length: getPreviewCopies(selected, jobs, settings) }, (_, index) => (
                 <PrintTicket
                   order={selected.order}
                   label={JOB_LABELS[selected.type]}
@@ -496,19 +512,24 @@ export function CashierDashboard() {
       };
 
       if (!response.ok || !payload.closed) {
-        setMessage(payload.error ?? "Stampa non riuscita. Tavolo non chiuso");
+        setMessage(
+          payload.error ??
+          `Stampa non riuscita. ${order.order_type === "takeaway" ? "Asporto" : "Tavolo"} non chiuso`,
+        );
         return;
       }
 
       setSelected(null);
       setMessage(
         payload.idempotent
-          ? "Tavolo già chiuso"
-          : `Scontrino stampato (${payload.copies ?? 1} copia) · tavolo chiuso`,
+          ? `${order.order_type === "takeaway" ? "Asporto" : "Tavolo"} già chiuso`
+          : `Scontrino stampato (${payload.copies ?? 1} copia) · ${
+              order.order_type === "takeaway" ? "asporto" : "tavolo"
+            } chiuso`,
       );
     } catch {
       markUnreliable();
-      setMessage("Connessione non affidabile: verifica stampa e stato del tavolo");
+      setMessage("Connessione non affidabile: verifica stampa e stato dell’ordine");
     } finally {
       setClosingOrderId(null);
       await load();
@@ -610,12 +631,16 @@ function OrderCard({
       <header>
         <div>
           <span className="eyebrow">#{order.order_number}</span>
-          <h3>Tavolo {order.table?.table_number}</h3>
+          <h3>{getOrderLocationLabel(order)}</h3>
         </div>
         <time>{formatDateTime(order.sent_to_cashier_at ?? order.created_at)}</time>
       </header>
       <p className="card-meta">
-        <span>{order.cover_count} coperti</span>
+        <span>
+          {order.order_type === "takeaway" && order.takeaway_pickup_at
+            ? `Ritiro ${formatTime(order.takeaway_pickup_at)}`
+            : `${order.cover_count} coperti`}
+        </span>
         <span aria-hidden="true"> · </span>
         <span className="card-waiter">{order.waiter?.full_name ?? "Staff"}</span>
       </p>
@@ -660,4 +685,21 @@ function printStatusLabel(job: PrintJob) {
   }
   if (job.status === "pending") return `${label} — stampa avviata`;
   return `${label} — stampa annullata`;
+}
+
+function getPreviewCopies(
+  selected: SelectedTicket,
+  jobs: PrintJob[],
+  settings: RestaurantSettings | null,
+) {
+  const job = jobs.find(
+    (candidate) =>
+      candidate.order_id === selected.order.id &&
+      candidate.job_type === selected.type,
+  );
+  if (job) return job.copies;
+  if (selected.order.order_type === "takeaway") {
+    return settings?.takeaway_print_copies ?? 1;
+  }
+  return settings?.dine_in_print_copies ?? 3;
 }

@@ -1,4 +1,5 @@
 import type { Order, PrintJobType } from "@/types/domain";
+import { getOrderLocationLabel } from "@/lib/order-display";
 
 export const PRINT_JOB_LABELS: Record<PrintJobType, string> = {
   new_order: "NUOVA COMANDA",
@@ -52,10 +53,7 @@ export function getPinsaPrintPrefix(categorySlug: string | null | undefined) {
 }
 
 export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
-  const tableName = order.table?.display_name?.trim();
-  const tableLabel = tableName
-    ? `${order.table?.table_number ?? "-"} - ${tableName}`
-    : String(order.table?.table_number ?? "-");
+  const locationLabel = getOrderLocationLabel(order).replace(" · ", " - ");
   const chunks: Buffer[] = [
     Buffer.from([0x1b, 0x40]),
     Buffer.from([0x1b, 0x61, 0x01]),
@@ -65,7 +63,16 @@ export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
     text(`COMANDA #${order.order_number}`),
     Buffer.from([0x1b, 0x61, 0x00]),
     text("-".repeat(LINE_WIDTH)),
-    ...wrap(`TAVOLO ${tableLabel}`).map(text),
+    ...wrap(locationLabel).map(text),
+    ...(order.order_type === "takeaway" && order.takeaway_pickup_at
+      ? [text(
+          `RITIRO ${new Date(order.takeaway_pickup_at).toLocaleTimeString("it-IT", {
+            timeZone: "Europe/Rome",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}`,
+        )]
+      : []),
     text(
       `ORA ${new Date(order.sent_to_cashier_at ?? order.created_at).toLocaleString("it-IT", {
         timeZone: "Europe/Rome",
@@ -98,13 +105,16 @@ export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
   }
 
   if (order.general_notes) {
-    chunks.push(text("-".repeat(LINE_WIDTH)), text("NOTE TAVOLO:"));
+    chunks.push(
+      text("-".repeat(LINE_WIDTH)),
+      text(order.order_type === "takeaway" ? "NOTE ORDINE:" : "NOTE TAVOLO:"),
+    );
     for (const line of wrap(order.general_notes)) chunks.push(text(line));
   }
 
   chunks.push(
     text("-".repeat(LINE_WIDTH)),
-    text(`COPERTI: ${order.cover_count}`),
+    ...(order.order_type === "dine_in" ? [text(`COPERTI: ${order.cover_count}`)] : []),
     Buffer.from([0x1b, 0x61, 0x01]),
     text(PRINT_JOB_LABELS[jobType]),
     text(""),

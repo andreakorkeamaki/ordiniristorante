@@ -1,0 +1,2 @@
+-- History marker: the linked database was restored to its previous schema.
+-- The deferred implementation is applied by 20260702180400.

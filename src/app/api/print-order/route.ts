@@ -285,6 +285,7 @@ export async function POST(request: Request) {
       title: `${PRINT_JOB_LABELS[type]} #${order.order_number}`,
       content: buildRaw80mmTicket(order, type),
       idempotencyKey: job.idempotency_key,
+      copies: job.copies,
     });
 
     const { data: savedJob, error: saveError } = await supabase

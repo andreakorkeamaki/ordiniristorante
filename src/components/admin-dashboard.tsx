@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useConnection } from "@/components/connection-provider";
 import { formatCurrency } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
@@ -14,6 +14,7 @@ import type {
 } from "@/types/domain";
 
 type Tab = "menu" | "extras" | "tables" | "settings";
+type Feedback = { text: string; type: "success" | "error" };
 
 export function AdminDashboard() {
   const { canWrite, blockReason, markUnreliable } = useConnection();
@@ -23,8 +24,10 @@ export function AdminDashboard() {
   const [extras, setExtras] = useState<MenuExtra[]>([]);
   const [tables, setTables] = useState<RestaurantTable[]>([]);
   const [settings, setSettings] = useState<RestaurantSettings | null>(null);
-  const [message, setMessage] = useState("");
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const feedbackTimer = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     const supabase = createClient();
@@ -58,6 +61,16 @@ export function AdminDashboard() {
     queueMicrotask(() => void load());
   }, [load]);
 
+  useEffect(() => {
+    if (feedbackTimer.current) window.clearTimeout(feedbackTimer.current);
+    if (feedback?.type === "success") {
+      feedbackTimer.current = window.setTimeout(() => setFeedback(null), 1_500);
+    }
+    return () => {
+      if (feedbackTimer.current) window.clearTimeout(feedbackTimer.current);
+    };
+  }, [feedback]);
+
   if (loading) return <div className="loader" aria-label="Caricamento amministrazione" />;
 
   return (
@@ -65,7 +78,15 @@ export function AdminDashboard() {
       <section className="workspace-heading">
         <div><p className="eyebrow">Configurazione</p><h1>Amministrazione</h1><p>Le modifiche al menu vengono pubblicate in tempo reale.</p></div>
       </section>
-      {message && <button className="external-update" onClick={() => setMessage("")}>{message} · Chiudi</button>}
+      {feedback && (
+        <button
+          className={`admin-toast ${feedback.type === "error" ? "is-error" : ""}`}
+          onClick={() => setFeedback(null)}
+          role="status"
+        >
+          {feedback.text}{feedback.type === "error" ? " · Chiudi" : ""}
+        </button>
+      )}
       {!canWrite && (
         <p className="connection-action-hint" role="status">
           {blockReason} Le configurazioni restano consultabili, ma non modificabili.
@@ -82,7 +103,7 @@ export function AdminDashboard() {
         ))}
       </nav>
 
-      <fieldset className="admin-write-scope" disabled={!canWrite}>
+      <fieldset className="admin-write-scope" disabled={!canWrite || saving}>
       {tab === "menu" && (
         <div className="admin-grid">
           <section className="admin-panel">
@@ -90,7 +111,7 @@ export function AdminDashboard() {
             <form className="inline-create" onSubmit={createCategory}>
               <input name="name" placeholder="Nuova categoria" required />
               <input name="slug" placeholder="slug" required />
-              <button className="button button-primary">Aggiungi</button>
+              <button className="button button-primary">{saving ? "Salvataggio…" : "Aggiungi"}</button>
             </form>
             <div className="admin-list">
               {categories.map((category, index) => (
@@ -121,7 +142,7 @@ export function AdminDashboard() {
                 <option value="pizzeria">Pizzeria</option><option value="cucina">Cucina</option>
                 <option value="bar">Bar</option><option value="cassa">Cassa</option>
               </select>
-              <button className="button button-primary">Crea prodotto</button>
+              <button className="button button-primary">{saving ? "Salvataggio…" : "Crea prodotto"}</button>
             </form>
             <div className="admin-list product-admin-list">
               {categories.filter((category) => category.slug !== "extra").map((category) => (
@@ -139,7 +160,7 @@ export function AdminDashboard() {
                       <label className="check-label"><input name="available" type="checkbox" defaultChecked={item.available} /> Disponibile</label>
                       <label className="check-label"><input name="visible_public" type="checkbox" defaultChecked={item.visible_public} /> QR</label>
                       <label className="check-label"><input name="visible_staff" type="checkbox" defaultChecked={item.visible_staff} /> Staff</label>
-                      <button className="button button-secondary">Salva</button>
+                      <button className="button button-secondary">{saving ? "Salvataggio…" : "Salva"}</button>
                     </form>
                   ))}
                 </section>
@@ -155,7 +176,7 @@ export function AdminDashboard() {
           <form className="inline-create" onSubmit={createExtra}>
             <input name="name" placeholder="Nome extra" required />
             <input name="price" type="number" min="0" step="0.01" placeholder="Prezzo" required />
-            <button className="button button-primary">Aggiungi</button>
+            <button className="button button-primary">{saving ? "Salvataggio…" : "Aggiungi"}</button>
           </form>
           <div className="admin-list">
             {extras.map((extra) => (
@@ -176,7 +197,7 @@ export function AdminDashboard() {
           <form className="inline-create" onSubmit={createTable}>
             <input name="table_number" type="number" min="1" placeholder="Numero" required />
             <input name="display_name" placeholder="Nome opzionale" />
-            <button className="button button-primary">Aggiungi</button>
+            <button className="button button-primary">{saving ? "Salvataggio…" : "Aggiungi"}</button>
           </form>
           <div className="admin-list table-admin-list">
             {tables.map((table) => (
@@ -196,10 +217,43 @@ export function AdminDashboard() {
           <div className="panel-title"><div><p className="eyebrow">Locale</p><h2>Impostazioni</h2></div></div>
           <label>Nome locale<input name="restaurant_name" defaultValue={settings.restaurant_name} required /></label>
           <label>Coperto<input name="cover_charge" type="number" min="0" step="0.01" defaultValue={settings.cover_charge} required /></label>
-          <label>Copie di stampa<input name="default_print_copies" type="number" min="1" max="10" defaultValue={settings.default_print_copies} required /></label>
+          <fieldset className="copy-setting">
+            <legend>Copie comande tavoli</legend>
+            <div className="copy-options">
+              {[1, 2, 3].map((copies) => (
+                <label key={copies}>
+                  <input
+                    name="dine_in_print_copies"
+                    type="radio"
+                    value={copies}
+                    defaultChecked={settings.dine_in_print_copies === copies}
+                  />
+                  {copies}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <fieldset className="copy-setting">
+            <legend>Copie comande asporto</legend>
+            <div className="copy-options">
+              {[1, 2, 3].map((copies) => (
+                <label key={copies}>
+                  <input
+                    name="takeaway_print_copies"
+                    type="radio"
+                    value={copies}
+                    defaultChecked={settings.takeaway_print_copies === copies}
+                  />
+                  {copies}
+                </label>
+              ))}
+            </div>
+          </fieldset>
           <label>Avviso allergeni<textarea name="allergen_notice" defaultValue={settings.allergen_notice ?? ""} /></label>
           <label>Testo finale ticket<textarea name="ticket_footer" defaultValue={settings.ticket_footer ?? ""} /></label>
-          <button className="button button-primary">Salva impostazioni</button>
+          <button className="button button-primary">
+            {saving ? "Salvataggio…" : "Salva impostazioni"}
+          </button>
         </form>
       )}
       </fieldset>
@@ -208,18 +262,29 @@ export function AdminDashboard() {
 
   async function execute(task: () => Promise<{ error: { message: string } | null }>) {
     if (!canWrite) {
-      setMessage(blockReason ?? "Connessione non verificata. Modifica non eseguita.");
+      setFeedback({
+        text: blockReason ?? "Connessione non verificata. Modifica non eseguita.",
+        type: "error",
+      });
       return;
     }
-    const { error } = await task();
-    if (
-      error &&
-      (!("code" in error) || !String((error as { code?: string }).code ?? ""))
-    ) {
-      markUnreliable();
+    setSaving(true);
+    try {
+      const { error } = await task();
+      if (
+        error &&
+        (!("code" in error) || !String((error as { code?: string }).code ?? ""))
+      ) {
+        markUnreliable();
+      }
+      setFeedback({
+        text: error ? error.message : "Salvato",
+        type: error ? "error" : "success",
+      });
+      if (!error) await load();
+    } finally {
+      setSaving(false);
     }
-    setMessage(error ? error.message : "Modifica salvata");
-    if (!error) await load();
   }
 
   async function createCategory(event: React.FormEvent<HTMLFormElement>) {
@@ -294,7 +359,8 @@ export function AdminDashboard() {
     await execute(() => createClient().from("restaurant_settings").update({
       restaurant_name: String(data.get("restaurant_name")),
       cover_charge: Number(data.get("cover_charge")),
-      default_print_copies: Number(data.get("default_print_copies")),
+      dine_in_print_copies: Number(data.get("dine_in_print_copies")),
+      takeaway_print_copies: Number(data.get("takeaway_print_copies")),
       allergen_notice: String(data.get("allergen_notice")) || null,
       ticket_footer: String(data.get("ticket_footer")) || null,
     }).eq("id", settings!.id));
@@ -302,7 +368,10 @@ export function AdminDashboard() {
 
   async function moveCategory(category: MenuCategory, delta: number) {
     if (!canWrite) {
-      setMessage(blockReason ?? "Connessione non verificata. Modifica non eseguita.");
+      setFeedback({
+        text: blockReason ?? "Connessione non verificata. Modifica non eseguita.",
+        type: "error",
+      });
       return;
     }
     const currentIndex = categories.findIndex((entry) => entry.id === category.id);
@@ -312,11 +381,15 @@ export function AdminDashboard() {
     const first = await supabase.from("menu_categories").update({ sort_order: other.sort_order }).eq("id", category.id);
     if (first.error) {
       if (!first.error.code) markUnreliable();
-      return setMessage(first.error.message);
+      setFeedback({ text: first.error.message, type: "error" });
+      return;
     }
     const second = await supabase.from("menu_categories").update({ sort_order: category.sort_order }).eq("id", other.id);
     if (second.error && !second.error.code) markUnreliable();
-    setMessage(second.error ? second.error.message : "Ordine categorie aggiornato");
+    setFeedback({
+      text: second.error ? second.error.message : "Salvato",
+      type: second.error ? "error" : "success",
+    });
     if (!second.error) await load();
   }
 

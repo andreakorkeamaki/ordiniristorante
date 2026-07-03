@@ -56,7 +56,7 @@ export async function loadOrderForPrint(
 
   return {
     ...rawOrder,
-    table: tables.get(rawOrder.table_id),
+    table: rawOrder.table_id ? tables.get(rawOrder.table_id) : undefined,
     waiter: profiles.get(rawOrder.created_by),
     items,
   } satisfies Order;

@@ -1,4 +1,5 @@
 import type { Order } from "@/types/domain";
+import { getOrderLocationLabel } from "@/lib/order-display";
 
 const LINE_WIDTH = 42;
 const DOUBLE_TEXT_SIZE = Buffer.from([0x1d, 0x21, 0x11]);
@@ -48,10 +49,7 @@ function wrap(value: string, width = LINE_WIDTH) {
 }
 
 export function buildRaw80mmReceipt(order: Order) {
-  const tableName = order.table?.display_name?.trim();
-  const tableLabel = tableName
-    ? `${order.table?.table_number ?? "-"} - ${tableName}`
-    : String(order.table?.table_number ?? "-");
+  const locationLabel = getOrderLocationLabel(order).replace(" · ", " - ");
   const chunks: Buffer[] = [
     Buffer.from([0x1b, 0x40]),
     Buffer.from([0x1b, 0x61, 0x01]),
@@ -62,7 +60,16 @@ export function buildRaw80mmReceipt(order: Order) {
     text(`ORDINE #${order.order_number}`),
     Buffer.from([0x1b, 0x61, 0x00]),
     text("-".repeat(LINE_WIDTH)),
-    ...wrap(`TAVOLO ${tableLabel}`).map(text),
+    ...wrap(locationLabel).map(text),
+    ...(order.order_type === "takeaway" && order.takeaway_pickup_at
+      ? [text(
+          `RITIRO ${new Date(order.takeaway_pickup_at).toLocaleTimeString("it-IT", {
+            timeZone: "Europe/Rome",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}`,
+        )]
+      : []),
     text(
       `DATA ${new Date().toLocaleString("it-IT", {
         timeZone: "Europe/Rome",
@@ -100,10 +107,12 @@ export function buildRaw80mmReceipt(order: Order) {
   chunks.push(
     text("-".repeat(LINE_WIDTH)),
     text(row("SUBTOTALE", money(order.subtotal))),
-    text(row(
-      `COPERTO ${order.cover_count} x ${money(order.cover_price_snapshot)}`,
-      money(order.cover_total),
-    )),
+    ...(order.order_type === "dine_in"
+      ? [text(row(
+          `COPERTO ${order.cover_count} x ${money(order.cover_price_snapshot)}`,
+          money(order.cover_total),
+        ))]
+      : []),
     text("=".repeat(LINE_WIDTH)),
     Buffer.from([0x1b, 0x61, 0x01]),
     DOUBLE_TEXT_SIZE,

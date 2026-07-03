@@ -1,4 +1,5 @@
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, formatTime } from "@/lib/format";
+import { getOrderLocationLabel } from "@/lib/order-display";
 import type { Order } from "@/types/domain";
 
 export function PrintTicket({ order, label }: { order: Order; label: string }) {
@@ -10,10 +11,10 @@ export function PrintTicket({ order, label }: { order: Order; label: string }) {
         <strong>COMANDA #{order.order_number}</strong>
       </header>
       <div className="ticket-meta">
-        <p>
-          TAVOLO {order.table?.table_number ?? "—"}
-          {order.table?.display_name ? ` · ${order.table.display_name}` : ""}
-        </p>
+        <p>{getOrderLocationLabel(order)}</p>
+        {order.order_type === "takeaway" && order.takeaway_pickup_at && (
+          <p>RITIRO {formatTime(order.takeaway_pickup_at)}</p>
+        )}
         <p>DATA/ORA {formatDateTime(order.sent_to_cashier_at ?? order.created_at)}</p>
         <p>CAMERIERE: {order.waiter?.full_name ?? "—"}</p>
       </div>
@@ -29,11 +30,16 @@ export function PrintTicket({ order, label }: { order: Order; label: string }) {
         ))}
       </div>
       {order.general_notes && (
-        <div className="ticket-notes"><strong>NOTE TAVOLO:</strong><p>{order.general_notes}</p></div>
+        <div className="ticket-notes">
+          <strong>{order.order_type === "takeaway" ? "NOTE ORDINE:" : "NOTE TAVOLO:"}</strong>
+          <p>{order.general_notes}</p>
+        </div>
       )}
-      <div className="ticket-summary">
-        <p>COPERTI: {order.cover_count}</p>
-      </div>
+      {order.order_type === "dine_in" && (
+        <div className="ticket-summary">
+          <p>COPERTI: {order.cover_count}</p>
+        </div>
+      )}
       <footer>{label}</footer>
     </article>
   );

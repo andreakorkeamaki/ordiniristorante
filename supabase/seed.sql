@@ -2,18 +2,20 @@
 begin;
 
 insert into public.restaurant_settings (
-  id, restaurant_name, cover_charge, default_print_copies, allergen_notice
+  id, restaurant_name, cover_charge, dine_in_print_copies, takeaway_print_copies, allergen_notice
 ) values (
   '00000000-0000-0000-0000-000000000001',
   'La Sagretta',
   1.90,
   3,
+  1,
   'Per allergie o intolleranze chiedi informazioni al personale prima di ordinare.'
 )
 on conflict (id) do update set
   restaurant_name = excluded.restaurant_name,
   cover_charge = excluded.cover_charge,
-  default_print_copies = excluded.default_print_copies,
+  dine_in_print_copies = excluded.dine_in_print_copies,
+  takeaway_print_copies = excluded.takeaway_print_copies,
   allergen_notice = excluded.allergen_notice;
 
 insert into public.menu_categories (
