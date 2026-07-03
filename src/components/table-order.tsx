@@ -16,6 +16,7 @@ import {
   canEditOrder,
   canSendOrderUpdate,
 } from "@/lib/order-workflow";
+import { getOrderShortLabel } from "@/lib/order-display";
 import { formatServiceLabel, isPreviousService } from "@/lib/service-management";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentService } from "@/hooks/use-current-service";
@@ -34,7 +35,16 @@ import type {
 
 type MutationTask = () => Promise<void>;
 
-export function TableOrder({ tableId, profile }: { tableId: string; profile: Profile }) {
+export function TableOrder({
+  tableId,
+  orderId: requestedOrderId,
+  profile,
+}: {
+  tableId?: string;
+  orderId?: string;
+  profile: Profile;
+}) {
+  const takeawayMode = Boolean(requestedOrderId);
   const { status, canWrite, blockReason, markUnreliable } = useConnection();
   const { service, loading: serviceLoading } = useCurrentService();
   const [table, setTable] = useState<RestaurantTable | null>(null);
@@ -62,7 +72,22 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       const supabase = createClient();
       let currentOrder: Order | null = null;
 
-      if (create) {
+      if (takeawayMode) {
+        const { data, error } = await supabase
+          .from("orders")
+          .select("*")
+          .eq("id", requestedOrderId!)
+          .eq("order_type", "takeaway")
+          .in("status", ["draft", "pending_cashier", "confirmed", "in_preparation", "bill_requested"])
+          .maybeSingle();
+        if (error) {
+          setSaving("error");
+          if (isConnectionFailure(error)) markUnreliable();
+          setLoading(false);
+          return;
+        }
+        currentOrder = data as Order | null;
+      } else if (create && tableId) {
         const { data, error } = await supabase.rpc("get_or_create_active_order", {
           p_table_id: tableId,
         });
@@ -73,7 +98,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
           return;
         }
         currentOrder = data as Order;
-      } else {
+      } else if (tableId) {
         const { data, error } = await supabase
           .from("orders")
           .select("*")
@@ -128,13 +153,15 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       loadedSuccessfully.current = true;
       setLoading(false);
     },
-    [markUnreliable, tableId],
+    [markUnreliable, requestedOrderId, tableId, takeawayMode],
   );
 
   const loadBase = useCallback(async (createOrder: boolean) => {
     const supabase = createClient();
     const [tableResult, categoryResult, itemResult, extraResult] = await Promise.all([
-      supabase.from("restaurant_tables").select("*").eq("id", tableId).single(),
+      tableId
+        ? supabase.from("restaurant_tables").select("*").eq("id", tableId).single()
+        : Promise.resolve({ data: null, error: null }),
       supabase.from("menu_categories").select("*").eq("active", true).order("sort_order"),
       supabase.from("menu_items").select("*").eq("active", true).eq("visible_staff", true).order("sort_order"),
       supabase.from("menu_extras").select("*").eq("active", true).eq("visible_staff", true).order("sort_order"),
@@ -149,7 +176,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
     }
 
     const loadedCategories = (categoryResult.data ?? []) as MenuCategory[];
-    setTable(tableResult.data as RestaurantTable);
+    setTable((tableResult.data as RestaurantTable | null) ?? null);
     setCategories(loadedCategories);
     setMenuItems((itemResult.data ?? []) as MenuItem[]);
     setExtras((extraResult.data ?? []) as MenuExtra[]);
@@ -212,12 +239,13 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       !canWrite ||
       !service ||
       isPreviousService(service) ||
-      order
+      order ||
+      takeawayMode
     ) {
       return;
     }
     queueMicrotask(() => void loadOrder(true));
-  }, [canWrite, loadOrder, order, service]);
+  }, [canWrite, loadOrder, order, service, takeawayMode]);
 
   useEffect(() => {
     if (status !== "online") {
@@ -280,9 +308,12 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       )
       .subscribe();
 
-    const room = supabase.channel(`table:${tableId}`, {
+    const room = supabase.channel(
+      tableId ? `table:${tableId}` : `table:takeaway:${orderId}`,
+      {
       config: { presence: { key: profile.id }, private: true },
-    });
+      },
+    );
     room
       .on("presence", { event: "sync" }, () => {
         const names = Object.values(room.presenceState())
@@ -307,14 +338,20 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
 
   const visibleProducts = useMemo(() => {
     const needle = search.toLowerCase().trim();
+    const takeawayCategoryIds = new Set(
+      categories
+        .filter((category) => category.slug === "all-you-can-eat")
+        .map((category) => category.id),
+    );
     return menuItems.filter((item) => {
+      if (takeawayMode && takeawayCategoryIds.has(item.category_id)) return false;
       const matchesCategory = search ? true : item.category_id === activeCategory;
       const matchesSearch =
         !needle ||
         `${item.name} ${item.ingredients ?? ""}`.toLowerCase().includes(needle);
       return matchesCategory && matchesSearch;
     });
-  }, [activeCategory, menuItems, search]);
+  }, [activeCategory, categories, menuItems, search, takeawayMode]);
   const menuItemQuantities = useMemo(
     () => aggregateMenuItemQuantities(items),
     [items],
@@ -323,7 +360,7 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
   if (loading || status === "checking" || serviceLoading) {
     return <div className="loader" aria-label="Caricamento comanda" />;
   }
-  if (!table || !order) {
+  if (!order || (!takeawayMode && !table)) {
     const serviceMessage = !service
       ? "La cassa deve iniziare pranzo o cena prima di aprire il tavolo."
       : isPreviousService(service)
@@ -335,7 +372,9 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
           {serviceMessage
             ? "Nessun servizio operativo"
             : canWrite
-              ? "Tavolo non disponibile"
+              ? takeawayMode
+                ? "Asporto non disponibile"
+                : "Tavolo non disponibile"
               : "Comanda non disponibile offline"}
         </h1>
         <p>{serviceMessage ?? (!canWrite ? blockReason : null)}</p>
@@ -385,9 +424,17 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
     <>
       <section className="order-heading">
         <div>
-          <Link className="back-link" href="/staff/tables">← Tutti i tavoli</Link>
+          <Link className="back-link" href="/staff/tables">← Tavoli e asporti</Link>
           <p className="eyebrow">Comanda #{order.order_number}</p>
-          <h1>Tavolo {table.table_number}</h1>
+          <h1>{getOrderShortLabel({ ...order, table: table ?? undefined })}</h1>
+          {order.order_type === "takeaway" && order.takeaway_pickup_at && (
+            <p className="takeaway-pickup">
+              Ritiro alle {new Intl.DateTimeFormat("it-IT", {
+                hour: "2-digit",
+                minute: "2-digit",
+              }).format(new Date(order.takeaway_pickup_at))}
+            </p>
+          )}
           {service && (
             <p className="service-context">{formatServiceLabel(service)}</p>
           )}
@@ -407,7 +454,9 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       </section>
 
       {presence.length > 0 && (
-        <p className="presence">Tavolo aperto da {presence.join(", ")}</p>
+        <p className="presence">
+          {order.order_type === "takeaway" ? "Asporto" : "Tavolo"} aperto da {presence.join(", ")}
+        </p>
       )}
       {externalUpdate && (
         <button className="external-update" onClick={() => setExternalUpdate(false)}>
@@ -427,21 +476,26 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
 
       <div className="order-layout">
         <section className="product-picker">
-          <div className="covers-row covers-row-menu">
-            <span>Coperti</span>
-            <div className="stepper">
-              <button disabled={!writeEnabled || order.cover_count === 0} onClick={() => void saveDetails(order.cover_count - 1)}>−</button>
-              <strong>{order.cover_count}</strong>
-              <button disabled={!writeEnabled} onClick={() => void saveDetails(order.cover_count + 1)}>+</button>
+          {order.order_type === "dine_in" && (
+            <div className="covers-row covers-row-menu">
+              <span>Coperti</span>
+              <div className="stepper">
+                <button disabled={!writeEnabled || order.cover_count === 0} onClick={() => void saveDetails(order.cover_count - 1)}>−</button>
+                <strong>{order.cover_count}</strong>
+                <button disabled={!writeEnabled} onClick={() => void saveDetails(order.cover_count + 1)}>+</button>
+              </div>
             </div>
-          </div>
+          )}
           <label className="compact-search product-search">
             <span>⌕</span>
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Cerca prodotto" />
           </label>
           {!search && (
             <nav className="category-tabs" aria-label="Categorie prodotti">
-              {categories.filter((category) => category.slug !== "extra").map((category) => (
+              {categories.filter((category) =>
+                category.slug !== "extra" &&
+                !(takeawayMode && category.slug === "all-you-can-eat")
+              ).map((category) => (
                 <button
                   className={activeCategory === category.id ? "active" : ""}
                   key={category.id}
@@ -529,7 +583,17 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
                   }}
                 />
                 {item.extras.map((extra) => (
-                  <p className="extra-line" key={extra.id}>↳ {extra.quantity}× {extra.extra_name_snapshot} · {formatCurrency(extra.total)}</p>
+                  <div className="extra-line" key={extra.id}>
+                    <span>↳ {extra.quantity}× {extra.extra_name_snapshot} · {formatCurrency(extra.total)}</span>
+                    <button
+                      type="button"
+                      aria-label={`Rimuovi extra ${extra.extra_name_snapshot}`}
+                      disabled={!writeEnabled}
+                      onClick={() => void removeExtra(extra.id)}
+                    >
+                      ×
+                    </button>
+                  </div>
                 ))}
                 {editable && extras.length > 0 && (
                   <select
@@ -570,7 +634,9 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
 
           <div className="totals">
             <p><span>Subtotale</span><strong>{formatCurrency(order.subtotal)}</strong></p>
-            <p><span>Coperto ({order.cover_count} × {formatCurrency(order.cover_price_snapshot)})</span><strong>{formatCurrency(order.cover_total)}</strong></p>
+            {order.order_type === "dine_in" && (
+              <p><span>Coperto ({order.cover_count} × {formatCurrency(order.cover_price_snapshot)})</span><strong>{formatCurrency(order.cover_total)}</strong></p>
+            )}
             <p className="grand-total"><span>Totale</span><strong>{formatCurrency(order.total)}</strong></p>
           </div>
         </section>
@@ -649,6 +715,15 @@ export function TableOrder({ tableId, profile }: { tableId: string; profile: Pro
       const { error } = await createClient().rpc("add_order_item_extra", {
         p_item_id: itemId,
         p_menu_extra_id: extraId,
+      });
+      if (error) throw error;
+    });
+  }
+
+  async function removeExtra(extraId: string) {
+    await mutate(async () => {
+      const { error } = await createClient().rpc("remove_order_item_extra", {
+        p_extra_id: extraId,
       });
       if (error) throw error;
     });

@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useConnection } from "@/components/connection-provider";
 import { ACTIVE_ORDER_STATUSES, ORDER_STATUS_LABELS } from "@/lib/constants";
-import { formatCurrency, formatDateTime } from "@/lib/format";
+import { formatCurrency, formatDateTime, formatTime } from "@/lib/format";
 import {
   formatServiceLabel,
   isPreviousService,
@@ -19,13 +20,17 @@ import type {
 } from "@/types/domain";
 
 export function StaffTables() {
-  const { markUnreliable } = useConnection();
+  const router = useRouter();
+  const { canWrite, blockReason, markUnreliable } = useConnection();
   const { service, loading: serviceLoading } = useCurrentService();
   const [tables, setTables] = useState<RestaurantTable[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [showTakeawayForm, setShowTakeawayForm] = useState(false);
+  const [creatingTakeaway, setCreatingTakeaway] = useState(false);
+  const [takeawayError, setTakeawayError] = useState("");
 
   const load = useCallback(async () => {
     if (serviceLoading) return;
@@ -72,7 +77,11 @@ export function StaffTables() {
   }, [load]);
 
   const orderByTable = useMemo(
-    () => new Map(orders.map((order) => [order.table_id, order])),
+    () => new Map(
+      orders
+        .filter((order) => order.order_type === "dine_in" && order.table_id)
+        .map((order) => [order.table_id!, order]),
+    ),
     [orders],
   );
   const filtered = tables.filter((table) =>
@@ -80,6 +89,19 @@ export function StaffTables() {
       .toLowerCase()
       .includes(query.toLowerCase()),
   );
+  const takeaways = orders
+    .filter((order) => order.order_type === "takeaway")
+    .filter((order) =>
+      `${order.takeaway_name ?? ""} ${order.order_number}`
+        .toLowerCase()
+        .includes(query.toLowerCase()),
+    )
+    .sort((first, second) =>
+      new Date(first.takeaway_pickup_at ?? first.created_at).getTime() -
+      new Date(second.takeaway_pickup_at ?? second.created_at).getTime(),
+    );
+  const dineInOrders = orders.filter((order) => order.order_type === "dine_in");
+  const serviceOperational = Boolean(service && !isPreviousService(service));
 
   if (loading || serviceLoading) {
     return <div className="loader" aria-label="Caricamento tavoli" />;
@@ -90,13 +112,16 @@ export function StaffTables() {
       <section className="workspace-heading">
         <div>
           <p className="eyebrow">Sala</p>
-          <h1>Tavoli</h1>
-          <p>{orders.length} attivi · {tables.length - orders.length} liberi</p>
+          <h1>Tavoli e asporti</h1>
+          <p>
+            {dineInOrders.length} tavoli attivi · {takeaways.length} asporti ·{" "}
+            {tables.length - dineInOrders.length} liberi
+          </p>
         </div>
         <label className="compact-search">
           <span>⌕</span>
           <input
-            placeholder="Cerca tavolo"
+            placeholder="Cerca tavolo o asporto"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -121,6 +146,56 @@ export function StaffTables() {
         </span>
       </section>
 
+      <section className="takeaway-section">
+        <div className="takeaway-section-heading">
+          <div>
+            <p className="eyebrow">Ritiro</p>
+            <h2>Asporti</h2>
+          </div>
+          <button
+            className="button button-primary"
+            disabled={!canWrite || !serviceOperational}
+            onClick={() => {
+              setTakeawayError("");
+              setShowTakeawayForm(true);
+            }}
+          >
+            + Nuovo asporto
+          </button>
+        </div>
+        {!canWrite && <p className="form-error">{blockReason}</p>}
+        <div className="takeaway-grid">
+          {takeaways.length ? takeaways.map((order) => {
+            const updater = profiles.get(order.updated_by);
+            return (
+              <Link
+                className={`takeaway-card status-${order.status}`}
+                href={`/staff/order/${order.id}`}
+                key={order.id}
+              >
+                <div>
+                  <span className="eyebrow">Comanda #{order.order_number}</span>
+                  <strong>{order.takeaway_name}</strong>
+                </div>
+                <time>
+                  {order.takeaway_pickup_at
+                    ? `Ritiro ${formatTime(order.takeaway_pickup_at)}`
+                    : "Ora da definire"}
+                </time>
+                <span className="status-label">{ORDER_STATUS_LABELS[order.status]}</span>
+                <b>{formatCurrency(order.total)}</b>
+                <small>
+                  Aggiornato {formatDateTime(order.updated_at)}
+                  {updater ? ` · ${updater.full_name}` : ""}
+                </small>
+              </Link>
+            );
+          }) : (
+            <p className="column-empty">Nessun asporto attivo</p>
+          )}
+        </div>
+      </section>
+
       <section className="tables-grid" aria-label="Elenco tavoli">
         {filtered.map((table) => {
           const order = orderByTable.get(table.id);
@@ -137,8 +212,76 @@ export function StaffTables() {
           );
         })}
       </section>
+
+      {showTakeawayForm && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="takeaway-title">
+          <form className="takeaway-modal" onSubmit={createTakeaway}>
+            <div className="modal-heading">
+              <div>
+                <p className="eyebrow">Nuova comanda</p>
+                <h2 id="takeaway-title">Nuovo asporto</h2>
+              </div>
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => setShowTakeawayForm(false)}
+              >
+                Chiudi
+              </button>
+            </div>
+            <label>
+              Nome cliente
+              <input name="customer_name" maxLength={80} autoFocus required />
+            </label>
+            <label>
+              Ora di ritiro
+              <input
+                name="pickup_at"
+                type="datetime-local"
+                defaultValue={getCurrentLocalDateTime()}
+                required
+              />
+            </label>
+            {takeawayError && <p className="form-error">{takeawayError}</p>}
+            <button className="button button-primary" disabled={creatingTakeaway}>
+              {creatingTakeaway ? "Creazione…" : "Crea e apri comanda"}
+            </button>
+          </form>
+        </div>
+      )}
     </>
   );
+
+  async function createTakeaway(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canWrite || !serviceOperational || creatingTakeaway) return;
+
+    const data = new FormData(event.currentTarget);
+    const pickupValue = String(data.get("pickup_at"));
+    setCreatingTakeaway(true);
+    setTakeawayError("");
+
+    const { data: order, error } = await createClient().rpc("create_takeaway_order", {
+      p_customer_name: String(data.get("customer_name")),
+      p_pickup_at: new Date(pickupValue).toISOString(),
+    });
+
+    if (error) {
+      if (!error.code) markUnreliable();
+      setTakeawayError(error.message);
+      setCreatingTakeaway(false);
+      return;
+    }
+
+    const created = order as Order;
+    router.push(`/staff/order/${created.id}`);
+  }
+}
+
+function getCurrentLocalDateTime() {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
 }
 
 function TableCard({

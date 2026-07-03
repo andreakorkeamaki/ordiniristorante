@@ -26,7 +26,7 @@ export async function POST(request: Request) {
 
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
-    return NextResponse.json({ error: "Tavolo non valido" }, { status: 400 });
+    return NextResponse.json({ error: "Ordine non valido" }, { status: 400 });
   }
 
   const supabase = await createClient();
@@ -44,9 +44,10 @@ export async function POST(request: Request) {
   if (order.status === "closed") {
     return NextResponse.json({ closed: true, idempotent: true });
   }
+  const orderLabel = order.order_type === "takeaway" ? "Asporto" : "Tavolo";
   if (!["in_preparation", "bill_requested"].includes(order.status)) {
     return NextResponse.json(
-      { error: "Il tavolo non è ancora pronto per la chiusura", closed: false },
+      { error: `${orderLabel} non ancora pronto per la chiusura`, closed: false },
       { status: 409 },
     );
   }
@@ -55,7 +56,7 @@ export async function POST(request: Request) {
   if (!availability.available) {
     return NextResponse.json(
       {
-        error: `${availability.message}. Tavolo non chiuso`,
+        error: `${availability.message}. ${orderLabel} non chiuso`,
         closed: false,
       },
       { status: 503 },
@@ -84,8 +85,8 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error: outcomeUncertain
-            ? "Esito stampa incerto: verifica la stampante. Tavolo non chiuso"
-            : `${error instanceof Error ? error.message : "Stampa non riuscita"}. Tavolo non chiuso`,
+            ? `Esito stampa incerto: verifica la stampante. ${orderLabel} non chiuso`
+            : `${error instanceof Error ? error.message : "Stampa non riuscita"}. ${orderLabel} non chiuso`,
           closed: false,
           outcome: outcomeUncertain ? "uncertain" : "failed",
         },
@@ -100,7 +101,7 @@ export async function POST(request: Request) {
   if (closeError) {
     return NextResponse.json(
       {
-        error: `Scontrino inviato, ma il tavolo non è stato chiuso: ${closeError.message}`,
+        error: `Scontrino inviato, ma l’ordine non è stato chiuso: ${closeError.message}`,
         closed: false,
         printNodeJobId,
       },

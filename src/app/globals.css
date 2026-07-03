@@ -901,6 +901,100 @@ code {
   gap: 0.9rem;
 }
 
+.takeaway-section {
+  margin-bottom: 1.2rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--surface);
+}
+
+.takeaway-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.8rem;
+}
+
+.takeaway-section-heading h2 {
+  margin: 0;
+  font-family: Georgia, serif;
+  font-weight: 500;
+}
+
+.takeaway-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.65rem;
+}
+
+.takeaway-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.55rem;
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--amber);
+  border-radius: 0.75rem;
+  background: var(--paper);
+}
+
+.takeaway-card > div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.takeaway-card time,
+.takeaway-card small {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.takeaway-card b {
+  justify-self: end;
+}
+
+.takeaway-card small {
+  grid-column: 1 / -1;
+}
+
+.takeaway-card.status-pending_cashier { border-left-color: var(--red); }
+.takeaway-card.status-confirmed { border-left-color: var(--blue); }
+.takeaway-card.status-in_preparation { border-left-color: var(--green); }
+.takeaway-card.status-bill_requested { border-left-color: #795289; }
+
+.takeaway-modal {
+  display: grid;
+  width: min(100%, 30rem);
+  gap: 1rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  background: var(--paper);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 30%);
+}
+
+.takeaway-modal label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 750;
+}
+
+.takeaway-modal input {
+  width: 100%;
+  min-height: 2.8rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  background: #fff;
+}
+
+.takeaway-pickup {
+  margin: 0.35rem 0 0;
+  color: var(--red);
+  font-weight: 800;
+}
+
 .staff-service-status {
   display: flex;
   align-items: center;
@@ -1320,9 +1414,27 @@ code {
 }
 
 .extra-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
   margin: 0.45rem 0 0;
   color: var(--muted);
   font-size: 0.75rem;
+}
+
+.extra-line button {
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #e7c7c1;
+  border-radius: 50%;
+  color: var(--red);
+  background: #fff;
+  font-size: 1rem;
+  font-weight: 800;
 }
 
 .general-note {
@@ -1873,7 +1985,7 @@ code {
 
 .active-table-row {
   display: grid;
-  grid-template-columns: 2.2rem 1fr auto;
+  grid-template-columns: minmax(4.5rem, 1fr) auto auto;
   align-items: center;
   gap: 0.45rem;
   width: 100%;
@@ -2041,7 +2153,7 @@ code {
 
 .ticket-preview {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
   gap: 1rem;
   overflow-x: auto;
 }
@@ -2260,6 +2372,73 @@ code {
 .settings-form textarea {
   min-height: 6rem;
   resize: vertical;
+}
+
+.admin-toast {
+  position: fixed;
+  z-index: 200;
+  top: max(1rem, env(safe-area-inset-top));
+  left: 50%;
+  min-width: 9rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #a7d1b2;
+  border-radius: 999px;
+  color: #175b2d;
+  background: #ecf8ef;
+  box-shadow: 0 12px 35px rgb(25 20 16 / 18%);
+  font-weight: 850;
+  transform: translateX(-50%);
+}
+
+.admin-toast.is-error {
+  width: min(calc(100% - 2rem), 42rem);
+  border-color: #e4b7ae;
+  border-radius: 0.75rem;
+  color: #7f2518;
+  background: #fff0ed;
+}
+
+.copy-setting {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.copy-setting legend {
+  margin-bottom: 0.5rem;
+  font-weight: 750;
+}
+
+.copy-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.copy-options label {
+  display: grid;
+  min-height: 2.8rem;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  background: #fff;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.copy-options label:has(input:checked) {
+  border-color: var(--red);
+  color: #fff;
+  background: var(--red);
+}
+
+.copy-options input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
 }
 
 @media (max-width: 900px) {
@@ -2582,6 +2761,15 @@ code {
     flex-direction: column;
   }
 
+  .takeaway-section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .takeaway-section-heading .button {
+    width: 100%;
+  }
+
   .service-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2632,7 +2820,9 @@ code {
   }
 
   .ticket-preview {
-    grid-template-columns: repeat(3, 78vw);
+    grid-template-columns: none;
+    grid-auto-columns: 78vw;
+    grid-auto-flow: column;
   }
 
   .modal-actions {

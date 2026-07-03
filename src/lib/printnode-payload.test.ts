@@ -30,6 +30,17 @@ describe("buildPrintNodePayload", () => {
     expect(payload.qty).toBe(1);
   });
 
+  it("permette due copie configurate per una comanda", () => {
+    const payload = buildPrintNodePayload({
+      printerId: 123,
+      title: "ASPORTO #43",
+      content: Buffer.from("ASPORTO\n", "ascii"),
+      copies: 2,
+    });
+
+    expect(payload.qty).toBe(2);
+  });
+
   it("salva nel source l'identità locale usata per recuperare una collisione", () => {
     const payload = buildPrintNodePayload({
       printerId: 123,

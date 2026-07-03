@@ -6,10 +6,11 @@ Web app mobile-first per menu QR, comande staff, cassa e amministrazione. Next.j
 
 - `/menu`: menu pubblico di sola lettura, ricerca, allergeni e predisposizione IT/EN.
 - `/staff`: accesso email/password e recupero credenziali.
-- `/staff/tables`: 31 tavoli e stato aggiornato in tempo reale.
+- `/staff/tables`: tavoli e asporti aggiornati in tempo reale.
 - `/staff/table/[id]`: comanda granulare, coperti, note, extra, Presence e invio alla cassa.
-- `/cassa`: coda realtime, conferma, preview ticket 80 mm, stampa browser e chiusura tavolo.
-- `/admin`: menu, disponibilità, extra, tavoli e impostazioni.
+- `/staff/order/[id]`: comanda asporto con nome cliente e ora di ritiro.
+- `/cassa`: coda realtime, preview ticket 80 mm, stampa browser e chiusura ordine.
+- `/admin`: menu, disponibilità, extra, tavoli e impostazioni di stampa.
 
 Supabase è l’unica fonte di verità. Il browser non salva menu o comande in `localStorage`.
 
@@ -154,14 +155,14 @@ Il recupero password parte da `/staff/forgot-password` e termina su `/staff/rese
 
 `POST /api/print-order` legge ordine e righe sul server, genera un ticket RAW
 ESC/POS da 80 mm e lo invia a PrintNode. L’API key e l’id stampante non vengono
-mai inviati al browser. Per la stampa RAW viene usato `qty: 3`, quindi PrintNode
-consegna tre copie senza dipendere dal supporto copie del driver.
+mai inviati al browser. Il valore `qty` viene salvato nel print job usando le
+impostazioni admin separate per tavoli e asporti (da una a tre copie).
 
 La cassa offre:
 
 - stato PrintNode, stampante e computer Dell;
 - lista job pending, printing e failed;
-- preview da 80 mm e tre copie PIZZERIA, CUCINA e CASSA;
+- preview da 80 mm con il numero di copie salvato nel job;
 - ticket distinti per nuovo ordine, aggiornamento, annullamento e ristampa;
 - etichetta `RISTAMPA` sulle ristampe;
 - badge `In attesa`, `In stampa`, `Stampata`, `Errore` e `Da verificare`;

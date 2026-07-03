@@ -289,6 +289,7 @@ export async function POST(request: Request) {
       title: `${PRINT_JOB_LABELS[ticketType]} #${order.order_number}`,
       content: buildRaw80mmTicket(order, ticketType),
       idempotencyKey: job.idempotency_key,
+      copies: job.copies,
       source,
       createdAfter: job.processing_started_at ?? job.created_at,
     });

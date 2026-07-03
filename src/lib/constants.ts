@@ -2,7 +2,8 @@ export const DEFAULT_SETTINGS = {
   id: "00000000-0000-0000-0000-000000000001",
   restaurant_name: "La Sagretta",
   cover_charge: 1.9,
-  default_print_copies: 3,
+  dine_in_print_copies: 3,
+  takeaway_print_copies: 1,
   allergen_notice:
     "Per allergie o intolleranze chiedi informazioni al personale prima di ordinare.",
   ticket_footer: null,

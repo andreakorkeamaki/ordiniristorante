@@ -1,0 +1,2 @@
+-- History marker: this migration was applied briefly and then fully reverted
+-- by 20260702180316 while the restaurant was operating.

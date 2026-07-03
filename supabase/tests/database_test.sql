@@ -1,5 +1,5 @@
 begin;
-select plan(84);
+select plan(109);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -26,6 +26,33 @@ select has_index(
   'only one restaurant service can be open'
 );
 select has_column('public', 'orders', 'service_id', 'orders belong to a service');
+select has_column('public', 'orders', 'order_type', 'orders distinguish tables and takeaways');
+select has_column('public', 'orders', 'takeaway_name', 'takeaways store the customer name');
+select has_column('public', 'orders', 'takeaway_pickup_at', 'takeaways store the pickup time');
+select has_column(
+  'public',
+  'restaurant_settings',
+  'dine_in_print_copies',
+  'table print copies are configurable'
+);
+select has_column(
+  'public',
+  'restaurant_settings',
+  'takeaway_print_copies',
+  'takeaway print copies are configurable'
+);
+select has_function(
+  'public',
+  'create_takeaway_order',
+  array['text', 'timestamp with time zone'],
+  'takeaway creation RPC exists'
+);
+select has_function(
+  'public',
+  'remove_order_item_extra',
+  array['uuid'],
+  'extra removal RPC exists'
+);
 select has_column('public', 'print_jobs', 'manually_confirmed', 'manual confirmation is persisted');
 select has_column('public', 'print_jobs', 'manual_confirmed_at', 'manual confirmation has a timestamp');
 select has_column('public', 'print_jobs', 'verification_required_at', 'uncertain jobs persist verification state');
@@ -208,6 +235,132 @@ values
   ('00000000-0000-4000-9000-000000009911', 9901, 'Test invio valido'),
   ('00000000-0000-4000-9000-000000009912', 9902, 'Test invio non valido');
 
+select lives_ok(
+  $$
+    select public.create_takeaway_order(
+      'Giulia Test',
+      now() + interval '30 minutes'
+    )
+  $$,
+  'a waiter can create a takeaway in the current service'
+);
+select is(
+  (
+    select order_type::text
+    from public.orders
+    where takeaway_name = 'Giulia Test'
+  ),
+  'takeaway',
+  'the takeaway order type is stored'
+);
+select is(
+  (
+    select table_id::text
+    from public.orders
+    where takeaway_name = 'Giulia Test'
+  ),
+  null::text,
+  'a takeaway does not consume a restaurant table'
+);
+select is(
+  (
+    select cover_count
+    from public.orders
+    where takeaway_name = 'Giulia Test'
+  ),
+  0,
+  'a takeaway starts with zero covers'
+);
+select lives_ok(
+  $$
+    select public.add_order_item(
+      (select id from public.orders where takeaway_name = 'Giulia Test'),
+      '00000000-0000-4000-8000-000000001001',
+      ''
+    )
+  $$,
+  'products can be added to a takeaway'
+);
+select lives_ok(
+  $$
+    select public.add_order_item_extra(
+      (
+        select id
+        from public.order_items
+        where order_id = (
+          select id from public.orders where takeaway_name = 'Giulia Test'
+        )
+        limit 1
+      ),
+      '00000000-0000-4000-8000-000000001080'
+    )
+  $$,
+  'an extra can be added to a takeaway item'
+);
+select is(
+  (
+    select count(*)::integer
+    from public.order_item_extras
+    where order_item_id = (
+      select id
+      from public.order_items
+      where order_id = (
+        select id from public.orders where takeaway_name = 'Giulia Test'
+      )
+      limit 1
+    )
+  ),
+  1,
+  'the added extra is stored'
+);
+select lives_ok(
+  $$
+    select public.remove_order_item_extra(
+      (
+        select extra.id
+        from public.order_item_extras as extra
+        join public.order_items as item on item.id = extra.order_item_id
+        where item.order_id = (
+          select id from public.orders where takeaway_name = 'Giulia Test'
+        )
+        limit 1
+      )
+    )
+  $$,
+  'an extra can be removed from the order'
+);
+select is(
+  (
+    select count(*)::integer
+    from public.order_item_extras as extra
+    join public.order_items as item on item.id = extra.order_item_id
+    where item.order_id = (
+      select id from public.orders where takeaway_name = 'Giulia Test'
+    )
+  ),
+  0,
+  'the removed extra is no longer stored'
+);
+select lives_ok(
+  $$
+    select public.send_order_to_cashier(
+      (select id from public.orders where takeaway_name = 'Giulia Test')
+    )
+  $$,
+  'a takeaway can be sent to the cashier'
+);
+select is(
+  (
+    select job.copies
+    from public.print_jobs as job
+    join public.orders as target_order on target_order.id = job.order_id
+    where target_order.takeaway_name = 'Giulia Test'
+      and job.job_type = 'new_order'
+  ),
+  1,
+  'takeaway jobs use the takeaway copy setting'
+);
+
 insert into public.orders (id, table_id, service_id)
 values
   (
@@ -292,7 +445,7 @@ select is(
     where order_id = '00000000-0000-4000-9000-000000009921'
   ),
   3,
-  'the print job always has three copies'
+  'the table print job uses the initial table copy setting'
 );
 select is(
   (
@@ -303,6 +456,82 @@ select is(
   '00000000-0000-4000-9000-000000009921:new_order',
   'the idempotency key contains order and type'
 );
+
+update public.profiles
+set role = 'admin'
+where id = '00000000-0000-4000-9000-000000009901';
+
+select lives_ok(
+  $$update public.restaurant_settings set dine_in_print_copies = 2$$,
+  'an admin can change the table copy setting'
+);
+
+update public.profiles
+set role = 'waiter'
+where id = '00000000-0000-4000-9000-000000009901';
+
+select lives_ok(
+  $test$
+    do $$
+    begin
+      insert into public.restaurant_tables (id, table_number, display_name)
+      values ('00000000-0000-4000-9000-000000009913', 9903, 'Copie future');
+
+      insert into public.orders (id, table_id, service_id)
+      values (
+        '00000000-0000-4000-9000-000000009923',
+        '00000000-0000-4000-9000-000000009913',
+        (select id from public.restaurant_services where closed_at is null)
+      );
+
+      perform public.add_order_item(
+        '00000000-0000-4000-9000-000000009923',
+        '00000000-0000-4000-8000-000000001001',
+        ''
+      );
+      perform public.send_order_to_cashier(
+        '00000000-0000-4000-9000-000000009923'
+      );
+    end;
+    $$
+  $test$,
+  'a later table order can be submitted after the setting changes'
+);
+select is(
+  (
+    select copies
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009923'
+      and job_type = 'new_order'
+  ),
+  2,
+  'new table jobs use the updated copy setting'
+);
+select is(
+  (
+    select copies
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009921'
+      and job_type = 'new_order'
+  ),
+  3,
+  'changing settings does not alter an existing queued job'
+);
+
+update public.profiles
+set role = 'admin'
+where id = '00000000-0000-4000-9000-000000009901';
+
+select throws_ok(
+  $$update public.restaurant_settings set dine_in_print_copies = 4$$,
+  '23514',
+  null,
+  'copy settings reject values above three'
+);
+
+update public.profiles
+set role = 'waiter'
+where id = '00000000-0000-4000-9000-000000009901';
 select is(
   (
     select count(*)::integer
@@ -645,6 +874,18 @@ where id = '00000000-0000-4000-9000-000000009901';
 select lives_ok(
   $$select public.cancel_order('00000000-0000-4000-9000-000000009921')$$,
   'a cashier can cancel an order'
+);
+select lives_ok(
+  $$
+    select public.cancel_order(
+      (select id from public.orders where takeaway_name = 'Giulia Test')
+    )
+  $$,
+  'a cashier can cancel a takeaway'
+);
+select lives_ok(
+  $$select public.cancel_order('00000000-0000-4000-9000-000000009923')$$,
+  'a cashier can cancel the later table order'
 );
 select is(
   (

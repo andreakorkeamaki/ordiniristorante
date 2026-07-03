@@ -10,6 +10,9 @@ const order: Order = {
   order_number: 42,
   table_id: "00000000-0000-4000-8000-000000000002",
   service_id: "00000000-0000-4000-8000-000000000004",
+  order_type: "dine_in",
+  takeaway_name: null,
+  takeaway_pickup_at: null,
   status: "confirmed",
   cover_count: 2,
   cover_price_snapshot: 1.9,
@@ -106,5 +109,27 @@ describe("buildRaw80mmTicket", () => {
     expect(body).not.toContain("23.80");
     expect(body).not.toContain("10.00");
     expect(body).not.toContain("1.50");
+  });
+
+  it("stampa nome e ora di ritiro senza tavolo o coperti per un asporto", () => {
+    const takeaway: Order = {
+      ...order,
+      table_id: null,
+      table: undefined,
+      order_type: "takeaway",
+      takeaway_name: "Giulia",
+      takeaway_pickup_at: "2026-06-29T18:30:00.000Z",
+      cover_count: 0,
+      cover_price_snapshot: 0,
+      cover_total: 0,
+    };
+
+    const body = buildRaw80mmTicket(takeaway, "new_order").toString("ascii");
+
+    expect(body).toContain("ASPORTO - Giulia");
+    expect(body).toContain("RITIRO 20:30");
+    expect(body).toContain("NOTE ORDINE:");
+    expect(body).not.toContain("TAVOLO");
+    expect(body).not.toContain("COPERTI:");
   });
 });
