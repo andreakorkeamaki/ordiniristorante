@@ -6,6 +6,8 @@ export const DEFAULT_SETTINGS = {
   takeaway_print_copies: 1,
   allergen_notice:
     "Per allergie o intolleranze chiedi informazioni al personale prima di ordinare.",
+  allergen_notice_en:
+    "If you have any food allergies or intolerances, please ask our staff for information before ordering.",
   ticket_footer: null,
 } as const;
 

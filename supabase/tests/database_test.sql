@@ -576,16 +576,14 @@ select results_eq(
 
 reset role;
 
-select throws_ok(
+select lives_ok(
   $$select public.send_order_to_cashier('00000000-0000-4000-9000-000000009922')$$,
-  'P0001',
-  'Le formule All You Can Eat (1) e i coperti (0) devono coincidere',
-  'an invalid All You Can Eat order is rejected'
+  'an All You Can Eat order does not have to match the cover count'
 );
 select is(
   (select status::text from public.orders where id = '00000000-0000-4000-9000-000000009922'),
-  'draft',
-  'a rejected order remains a draft'
+  'pending_cashier',
+  'All You Can Eat quantity and cover count remain independent'
 );
 
 update public.profiles
@@ -824,45 +822,52 @@ select is(
 );
 
 update public.profiles
-set role = 'cashier'
-where id = '00000000-0000-4000-9000-000000009901';
-
-select lives_ok(
-  $$select public.request_reprint('00000000-0000-4000-9000-000000009921')$$,
-  'a cashier can request a reprint'
-);
-select lives_ok(
-  $$select public.request_reprint('00000000-0000-4000-9000-000000009921')$$,
-  'a repeated reprint request is idempotent'
-);
-select is(
-  (
-    select count(*)::integer
-    from public.print_jobs
-    where order_id = '00000000-0000-4000-9000-000000009921'
-      and job_type = 'reprint'
-      and retry_of_job_id is null
-  ),
-  1,
-  'only one explicit reprint exists for the repeated action'
-);
-
-update public.profiles
 set role = 'waiter'
 where id = '00000000-0000-4000-9000-000000009901';
 
 set local role authenticated;
 
-select is_empty(
+select lives_ok(
+  $$
+    select public.request_reprint(
+      '00000000-0000-4000-9000-000000009921',
+      '00000000-0000-4000-9000-000000009941',
+      'Ristampa richiesta dai tavoli'
+    )
+  $$,
+  'a waiter can request a table reprint'
+);
+select lives_ok(
+  $$
+    select public.request_reprint(
+      '00000000-0000-4000-9000-000000009921',
+      '00000000-0000-4000-9000-000000009941',
+      'Ristampa richiesta dai tavoli'
+    )
+  $$,
+  'a repeated table reprint action is idempotent'
+);
+select is(
+  (
+    select count(*)::integer
+    from public.print_jobs
+    where idempotency_key =
+      '00000000-0000-4000-9000-000000009921:reprint:00000000-0000-4000-9000-000000009941'
+  ),
+  1,
+  'only one table reprint exists for the repeated action'
+);
+select results_eq(
   $$
     update public.print_jobs
     set status = 'printing'
-    where order_id = '00000000-0000-4000-9000-000000009921'
-      and job_type = 'reprint'
+    where idempotency_key =
+      '00000000-0000-4000-9000-000000009921:reprint:00000000-0000-4000-9000-000000009941'
       and status = 'pending'
-    returning id
+    returning status::text
   $$,
-  'a waiter cannot claim a reprint job'
+  $$values ('printing')$$,
+  'a waiter can claim the table reprint they requested'
 );
 
 reset role;

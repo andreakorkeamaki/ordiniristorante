@@ -123,16 +123,20 @@ export async function POST(request: Request) {
   const isWaiter = profile.role === "waiter";
   if (
     isWaiter &&
-    (input.operation === "retry" || !["new_order", "order_update"].includes(input.type))
+    (input.operation === "retry" ||
+      !["new_order", "order_update", "reprint"].includes(input.type))
   ) {
     return NextResponse.json(
-      { error: "Il cameriere può inviare soltanto la comanda e i suoi aggiornamenti" },
+      { error: "Il cameriere non può eseguire questa operazione di stampa" },
       { status: 403 },
     );
   }
 
   const targetOrder = await getOrderForAutomaticPrint(supabase, input.orderId);
-  if (!targetOrder || (isWaiter && targetOrder.created_by !== profile.id)) {
+  if (
+    !targetOrder ||
+    (isWaiter && input.type !== "reprint" && targetOrder.created_by !== profile.id)
+  ) {
     return NextResponse.json({ error: "Comanda non disponibile" }, { status: 404 });
   }
 
@@ -468,13 +472,10 @@ async function getOrCreatePrintJob(
   }
 
   if (input.type === "reprint") {
-    if (!["cashier", "admin"].includes(profile.role)) {
-      return { response: NextResponse.json({ error: "Non autorizzato" }, { status: 403 }) };
-    }
     const { data, error } = await supabase.rpc("request_reprint", {
       p_order_id: input.orderId,
       p_action_key: input.actionKey,
-      p_reason: input.reason ?? "Ristampa richiesta dalla cassa",
+      p_reason: input.reason ?? "Ristampa richiesta dai tavoli",
     });
     if (error || !data) {
       return {

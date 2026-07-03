@@ -9,7 +9,6 @@ import { formatCurrency } from "@/lib/format";
 import {
   aggregateMenuItemQuantities,
   getOrderSubmissionIssue,
-  validateAllYouCanEat,
 } from "@/lib/order-calculations";
 import { shouldFlagExternalOrderUpdate } from "@/lib/order-realtime";
 import {
@@ -398,16 +397,13 @@ export function TableOrder({
     profile.role === "waiter" &&
     order.status === "pending_cashier" &&
     isWithinMinutes(order.sent_to_cashier_at, 15);
-  const ayce = validateAllYouCanEat(items, order.cover_count);
   const submissionIssue =
     !operationsEnabled && order.status === "draft"
       ? operationalBlockReason
       : getOrderSubmissionIssue({
           status: order.status,
           itemCount: items.length,
-          covers: order.cover_count,
           saving,
-          allYouCanEat: ayce,
         });
   const updateReady =
     canSendOrderUpdate(order.status) && updatePrintStatus === "pending";
@@ -615,8 +611,6 @@ export function TableOrder({
               </article>
             ))}
           </div>
-
-          {!ayce.valid && <p className="form-error">{submissionIssue}</p>}
 
           <label className="general-note">
             Nota generale

@@ -27,6 +27,7 @@ export interface RestaurantSettings {
   dine_in_print_copies: number;
   takeaway_print_copies: number;
   allergen_notice: string | null;
+  allergen_notice_en: string | null;
   ticket_footer: string | null;
 }
 
@@ -36,6 +37,7 @@ export interface MenuCategory {
   name_en: string | null;
   slug: string;
   description: string | null;
+  description_en: string | null;
   sort_order: number;
   active: boolean;
 }
@@ -66,6 +68,7 @@ export interface MenuExtra {
   id: string;
   category_id: string | null;
   name: string;
+  name_en: string | null;
   price: number;
   active: boolean;
   available: boolean;

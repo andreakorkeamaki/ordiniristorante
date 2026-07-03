@@ -12,7 +12,7 @@ export default async function TablesPage() {
     <>
       <AppHeader profile={profile} />
       <main className="workspace">
-        <StaffTables />
+        <StaffTables profile={profile} />
       </main>
     </>
   );
