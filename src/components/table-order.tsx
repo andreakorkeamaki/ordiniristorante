@@ -389,7 +389,12 @@ export function TableOrder({
               : "Comanda non disponibile offline"}
         </h1>
         <p>{serviceMessage ?? (!canWrite ? blockReason : null)}</p>
-        <Link className="button button-primary" href="/staff/tables">Torna ai tavoli</Link>
+        <Link
+          className="button button-primary"
+          href={takeawayMode ? "/asporti" : "/staff/tables"}
+        >
+          {takeawayMode ? "Torna agli asporti" : "Torna ai tavoli"}
+        </Link>
       </section>
     );
   }
@@ -432,7 +437,12 @@ export function TableOrder({
     <>
       <section className="order-heading">
         <div>
-          <Link className="back-link" href="/staff/tables">← Tavoli e asporti</Link>
+          <Link
+            className="back-link"
+            href={order.order_type === "takeaway" ? "/asporti" : "/staff/tables"}
+          >
+            {order.order_type === "takeaway" ? "← Asporti" : "← Tavoli"}
+          </Link>
           <p className="eyebrow">Comanda #{order.order_number}</p>
           <h1>{getOrderShortLabel({ ...order, table: table ?? undefined })}</h1>
           {order.order_type === "takeaway" && order.takeaway_pickup_at && (

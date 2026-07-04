@@ -909,39 +909,14 @@ code {
   background: var(--surface);
 }
 
-.takeaway-section-heading {
+.takeaway-page-section {
+  margin-bottom: 0;
+}
+
+.takeaway-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0.8rem;
-}
-
-.takeaway-section-heading h2 {
-  margin: 0;
-  font-family: Georgia, serif;
-  font-weight: 500;
-}
-
-.takeaway-collapse {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  min-width: min(100%, 15rem);
-  padding: 0;
-  border: 0;
-  background: transparent;
-  text-align: left;
-}
-
-.takeaway-collapse .eyebrow {
-  grid-column: 1 / -1;
-}
-
-.takeaway-collapse > span {
-  color: var(--red);
-  font-size: 1.4rem;
-  font-weight: 800;
+  gap: 0.65rem;
 }
 
 .takeaway-grid {
@@ -2765,6 +2740,7 @@ code {
   }
 
   .app-header {
+    flex-wrap: wrap;
     gap: 0.5rem;
     padding-top: max(0.65rem, env(safe-area-inset-top));
     padding-right: max(0.65rem, env(safe-area-inset-right));
@@ -2789,10 +2765,16 @@ code {
   }
 
   .app-nav {
+    order: 3;
+    width: 100%;
+    overflow-x: auto;
     gap: 0;
+    border-top: 1px solid var(--line);
   }
 
   .app-nav a {
+    flex: 1 0 auto;
+    justify-content: center;
     display: inline-flex;
     align-items: center;
     padding-inline: 0.45rem;
@@ -2912,12 +2894,13 @@ code {
     flex-direction: column;
   }
 
-  .takeaway-section-heading {
-    align-items: stretch;
-    flex-direction: column;
+  .takeaway-toolbar {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
-  .takeaway-section-heading .button {
+  .takeaway-toolbar .compact-search,
+  .takeaway-toolbar .button {
     width: 100%;
   }
 

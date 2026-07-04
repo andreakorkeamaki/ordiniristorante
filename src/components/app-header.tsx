@@ -6,10 +6,12 @@ const links: Record<AppRole, { href: string; label: string }[]> = {
   waiter: [{ href: "/staff/tables", label: "Tavoli" }],
   cashier: [
     { href: "/staff/tables", label: "Tavoli" },
+    { href: "/asporti", label: "Asporti" },
     { href: "/cassa", label: "Cassa" },
   ],
   admin: [
     { href: "/staff/tables", label: "Tavoli" },
+    { href: "/asporti", label: "Asporti" },
     { href: "/cassa", label: "Cassa" },
     { href: "/admin", label: "Admin" },
   ],

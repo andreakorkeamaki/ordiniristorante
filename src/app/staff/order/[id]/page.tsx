@@ -13,7 +13,7 @@ export default async function TakeawayOrderPage({
 }) {
   const [{ id }, profile] = await Promise.all([
     params,
-    requireProfile(["waiter", "cashier", "admin"]),
+    requireProfile(["cashier", "admin"]),
   ]);
 
   return (
