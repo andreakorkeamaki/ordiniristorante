@@ -1,8 +1,7 @@
 import type { Order, PrintJobType } from "@/types/domain";
 import { getOrderLocationLabel } from "@/lib/order-display";
 import {
-  groupOrderItemsByPreparationArea,
-  type PreparationAreaGroup,
+  groupOrderItemsByCategory,
 } from "@/lib/order-items";
 
 export const PRINT_JOB_LABELS: Record<PrintJobType, string> = {
@@ -56,11 +55,7 @@ export function getPinsaPrintPrefix(categorySlug: string | null | undefined) {
   return "";
 }
 
-function buildRaw80mmDepartmentTicket(
-  order: Order,
-  jobType: PrintJobType,
-  department: PreparationAreaGroup,
-) {
+export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
   const locationLabel = getOrderLocationLabel(order).replace(" · ", " - ");
   const chunks: Buffer[] = [
     Buffer.from([0x1b, 0x40]),
@@ -68,7 +63,6 @@ function buildRaw80mmDepartmentTicket(
     DOUBLE_TEXT_SIZE,
     text("LA SAGRETTA"),
     text(PRINT_JOB_LABELS[jobType]),
-    text(department.label),
     text(`COMANDA #${order.order_number}`),
     Buffer.from([0x1b, 0x61, 0x00]),
     text("-".repeat(LINE_WIDTH)),
@@ -94,22 +88,31 @@ function buildRaw80mmDepartmentTicket(
     text("-".repeat(LINE_WIDTH)),
   ];
 
-  for (const item of department.items) {
-    const prefix = getPinsaPrintPrefix(item.category_slug);
-    const itemName = prefix
-      ? `${prefix} ${item.item_name_snapshot}`
-      : item.item_name_snapshot;
-    for (const line of wrap(`${item.quantity}x ${itemName}`)) {
-      chunks.push(text(line));
-    }
-    if (item.notes) {
-      for (const line of wrap(`  NOTA: ${item.notes}`)) chunks.push(text(line));
-    }
-    for (const extra of item.extras ?? []) {
-      for (const line of wrap(`  + ${extra.quantity}x ${extra.extra_name_snapshot}`)) {
+  for (const category of groupOrderItemsByCategory(order.items ?? [])) {
+    chunks.push(
+      Buffer.from([0x1b, 0x61, 0x01]),
+      ...wrap(category.label.toUpperCase()).map(text),
+      Buffer.from([0x1b, 0x61, 0x00]),
+    );
+
+    for (const item of category.items) {
+      const prefix = getPinsaPrintPrefix(item.category_slug);
+      const itemName = prefix
+        ? `${prefix} ${item.item_name_snapshot}`
+        : item.item_name_snapshot;
+      for (const line of wrap(`${item.quantity}x ${itemName}`)) {
         chunks.push(text(line));
       }
+      if (item.notes) {
+        for (const line of wrap(`  NOTA: ${item.notes}`)) chunks.push(text(line));
+      }
+      for (const extra of item.extras ?? []) {
+        for (const line of wrap(`  + ${extra.quantity}x ${extra.extra_name_snapshot}`)) {
+          chunks.push(text(line));
+        }
+      }
     }
+    chunks.push(text(""));
   }
 
   if (order.general_notes) {
@@ -123,7 +126,6 @@ function buildRaw80mmDepartmentTicket(
   chunks.push(
     text("-".repeat(LINE_WIDTH)),
     Buffer.from([0x1b, 0x61, 0x01]),
-    text(department.label),
     text(PRINT_JOB_LABELS[jobType]),
     text(""),
     text(""),
@@ -131,12 +133,4 @@ function buildRaw80mmDepartmentTicket(
   );
 
   return Buffer.concat(chunks);
-}
-
-export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
-  return Buffer.concat(
-    groupOrderItemsByPreparationArea(order.items ?? []).map((department) =>
-      buildRaw80mmDepartmentTicket(order, jobType, department),
-    ),
-  );
 }

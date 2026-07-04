@@ -115,7 +115,9 @@ export interface OrderItem {
   notes: string;
   preparation_area_snapshot: PreparationArea;
   version: number;
+  category_name?: string | null;
   category_slug?: string | null;
+  category_sort_order?: number | null;
   extras: OrderItemExtra[];
 }
 

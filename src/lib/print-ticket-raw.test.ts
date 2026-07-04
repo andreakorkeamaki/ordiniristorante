@@ -88,7 +88,7 @@ describe("buildRaw80mmTicket", () => {
     expect(body).toContain("RISTAMPA");
     expect(body).toContain("COMANDA #42");
     expect(body).toContain("TAVOLO 7 - Terrazza");
-    expect(body).toContain("PIZZERIA");
+    expect(body).toContain("ROSSE");
     expect(body).toContain("2x R Pinsa Margherita");
     expect(body).not.toContain("CAMERIERE:");
     expect(ticket.subarray(-4)).toEqual(Buffer.from([0x1d, 0x56, 0x41, 0x10]));
@@ -153,18 +153,24 @@ describe("buildRaw80mmTicket", () => {
     expect(body).not.toContain("COPERTI:");
   });
 
-  it("produce una comanda distinta per reparto senza mescolare i prodotti", () => {
+  it("produce una sola comanda con i prodotti raggruppati per categoria", () => {
     const multiDepartmentOrder: Order = {
       ...order,
       items: [
-        order.items![0],
+        {
+          ...order.items![0],
+          category_name: "Pinse rosse",
+          category_sort_order: 2,
+        },
         {
           ...order.items![0],
           id: "item-2",
           menu_item_id: "tagliere",
           item_name_snapshot: "Tagliere misto",
           preparation_area_snapshot: "cucina",
+          category_name: "Antipasti e fritti",
           category_slug: "antipasti",
+          category_sort_order: 0,
           notes: "Senza salumi",
           extras: [],
         },
@@ -174,34 +180,29 @@ describe("buildRaw80mmTicket", () => {
           menu_item_id: "acqua",
           item_name_snapshot: "Acqua",
           preparation_area_snapshot: "bar",
+          category_name: "Bevande",
           category_slug: "bevande",
+          category_sort_order: 8,
           notes: "",
           extras: [],
         },
       ],
     };
 
-    const departments = buildRaw80mmTicket(
-      multiDepartmentOrder,
-      "new_order",
-    )
-      .toString("ascii")
-      .split("\u001dVA\u0010")
-      .filter(Boolean);
+    const body = buildRaw80mmTicket(multiDepartmentOrder, "new_order")
+      .toString("ascii");
 
-    expect(departments).toHaveLength(3);
-    expect(departments[0]).toContain("PIZZERIA");
-    expect(departments[0]).toContain("Pinsa Margherita");
-    expect(departments[0]).not.toContain("Tagliere misto");
-    expect(departments[0]).not.toContain("Acqua");
-
-    expect(departments[1]).toContain("CUCINA / TAGLIERI");
-    expect(departments[1]).toContain("Tagliere misto");
-    expect(departments[1]).toContain("NOTA: Senza salumi");
-    expect(departments[1]).not.toContain("Pinsa Margherita");
-
-    expect(departments[2]).toContain("BEVANDE");
-    expect(departments[2]).toContain("Acqua");
-    expect(departments[2]).not.toContain("Tagliere misto");
+    expect(body.split("\u001dVA\u0010").filter(Boolean)).toHaveLength(1);
+    expect(body).toContain("ANTIPASTI E FRITTI");
+    expect(body).toContain("PINSE ROSSE");
+    expect(body).toContain("BEVANDE");
+    expect(body.indexOf("ANTIPASTI E FRITTI")).toBeLessThan(
+      body.indexOf("PINSE ROSSE"),
+    );
+    expect(body.indexOf("PINSE ROSSE")).toBeLessThan(body.indexOf("BEVANDE"));
+    expect(body).toContain("Tagliere misto");
+    expect(body).toContain("NOTA: Senza salumi");
+    expect(body).toContain("Pinsa Margherita");
+    expect(body).toContain("Acqua");
   });
 });

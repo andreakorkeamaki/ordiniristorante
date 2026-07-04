@@ -172,6 +172,48 @@ export function groupOrderItemsByPreparationArea(items: OrderItem[]) {
   })).filter((group) => group.items.length > 0);
 }
 
+export function groupOrderItemsByCategory(items: OrderItem[]) {
+  const groups = new Map<
+    string,
+    {
+      label: string;
+      sortOrder: number;
+      firstItemIndex: number;
+      items: OrderItem[];
+    }
+  >();
+
+  aggregatePreparationOrderItems(items).forEach((item, index) => {
+    const key = item.category_slug ?? item.category_name ?? "altro";
+    const existing = groups.get(key);
+
+    if (existing) {
+      existing.items.push(item);
+      return;
+    }
+
+    groups.set(key, {
+      label:
+        item.category_name ??
+        item.category_slug?.replaceAll("-", " ").toUpperCase() ??
+        "ALTRO",
+      sortOrder: item.category_sort_order ?? Number.MAX_SAFE_INTEGER,
+      firstItemIndex: index,
+      items: [item],
+    });
+  });
+
+  return [...groups.values()].sort(
+    (left, right) =>
+      left.sortOrder - right.sortOrder ||
+      left.firstItemIndex - right.firstItemIndex,
+  );
+}
+
 export type PreparationAreaGroup = ReturnType<
   typeof groupOrderItemsByPreparationArea
+>[number];
+
+export type CategoryGroup = ReturnType<
+  typeof groupOrderItemsByCategory
 >[number];

@@ -19,7 +19,7 @@ export async function loadOrderForPrint(
     supabase
       .from("order_items")
       .select(
-        "*, menu_item:menu_items(category:menu_categories(slug)), extras:order_item_extras(*)",
+        "*, menu_item:menu_items(category:menu_categories(name, slug, sort_order)), extras:order_item_extras(*)",
       )
       .eq("order_id", orderId)
       .order("created_at"),
@@ -44,13 +44,21 @@ export async function loadOrderForPrint(
   );
   const items = (linesResult.data ?? []).map((row) => {
     const printableRow = row as OrderItem & {
-      menu_item?: { category?: { slug?: string | null } | null } | null;
+      menu_item?: {
+        category?: {
+          name?: string | null;
+          slug?: string | null;
+          sort_order?: number | null;
+        } | null;
+      } | null;
     };
     const { menu_item: menuItem, ...item } = printableRow;
 
     return {
       ...item,
+      category_name: menuItem?.category?.name ?? null,
       category_slug: menuItem?.category?.slug ?? null,
+      category_sort_order: menuItem?.category?.sort_order ?? null,
     };
   });
 
