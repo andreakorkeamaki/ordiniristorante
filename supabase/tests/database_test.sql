@@ -1,5 +1,5 @@
 begin;
-select plan(109);
+select plan(113);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -46,6 +46,12 @@ select has_function(
   'create_takeaway_order',
   array['text', 'timestamp with time zone'],
   'takeaway creation RPC exists'
+);
+select has_function(
+  'public',
+  'reorder_menu_items',
+  array['uuid', 'uuid[]'],
+  'menu item reorder RPC exists'
 );
 select has_function(
   'public',
@@ -235,6 +241,22 @@ values
   ('00000000-0000-4000-9000-000000009911', 9901, 'Test invio valido'),
   ('00000000-0000-4000-9000-000000009912', 9902, 'Test invio non valido');
 
+select throws_ok(
+  $$
+    select public.create_takeaway_order(
+      'Giulia Test',
+      now() + interval '30 minutes'
+    )
+  $$,
+  'P0001',
+  'Solo Cassa e Admin possono creare asporti',
+  'a waiter cannot create a takeaway'
+);
+
+update public.profiles
+set role = 'cashier'
+where id = '00000000-0000-4000-9000-000000009901';
+
 select lives_ok(
   $$
     select public.create_takeaway_order(
@@ -242,7 +264,7 @@ select lives_ok(
       now() + interval '30 minutes'
     )
   $$,
-  'a waiter can create a takeaway in the current service'
+  'a cashier can create a takeaway in the current service'
 );
 select is(
   (
@@ -361,6 +383,10 @@ select is(
   'takeaway jobs use the takeaway copy setting'
 );
 
+update public.profiles
+set role = 'waiter'
+where id = '00000000-0000-4000-9000-000000009901';
+
 insert into public.orders (id, table_id, service_id)
 values
   (
@@ -460,6 +486,52 @@ select is(
 update public.profiles
 set role = 'admin'
 where id = '00000000-0000-4000-9000-000000009901';
+
+select lives_ok(
+  $test$
+    do $$
+    declare
+      target_category_id uuid;
+      ordered_item_ids uuid[];
+    begin
+      select id
+      into target_category_id
+      from public.menu_categories
+      where slug = 'rosse';
+
+      select array_agg(id order by name desc, id)
+      into ordered_item_ids
+      from public.menu_items
+      where category_id = target_category_id;
+
+      perform public.reorder_menu_items(
+        target_category_id,
+        ordered_item_ids
+      );
+    end;
+    $$
+  $test$,
+  'an admin can save a complete product order inside one category'
+);
+select is(
+  (
+    select name
+    from public.menu_items
+    where category_id = (
+      select id from public.menu_categories where slug = 'rosse'
+    )
+    order by sort_order
+    limit 1
+  ),
+  (
+    select max(item.name)
+    from public.menu_items as item
+    join public.menu_categories as category
+      on category.id = item.category_id
+    where category.slug = 'rosse'
+  ),
+  'the saved product order is persisted in sort_order'
+);
 
 select lives_ok(
   $$update public.restaurant_settings set dine_in_print_copies = 2$$,

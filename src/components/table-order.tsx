@@ -161,8 +161,20 @@ export function TableOrder({
       tableId
         ? supabase.from("restaurant_tables").select("*").eq("id", tableId).single()
         : Promise.resolve({ data: null, error: null }),
-      supabase.from("menu_categories").select("*").eq("active", true).order("sort_order"),
-      supabase.from("menu_items").select("*").eq("active", true).eq("visible_staff", true).order("sort_order"),
+      supabase
+        .from("menu_categories")
+        .select("*")
+        .eq("active", true)
+        .order("sort_order")
+        .order("name"),
+      supabase
+        .from("menu_items")
+        .select("*")
+        .eq("active", true)
+        .eq("visible_staff", true)
+        .order("category_id")
+        .order("sort_order")
+        .order("name"),
       supabase.from("menu_extras").select("*").eq("active", true).eq("visible_staff", true).order("sort_order"),
     ]);
     const firstError =

@@ -88,8 +88,9 @@ describe("buildRaw80mmTicket", () => {
     expect(body).toContain("RISTAMPA");
     expect(body).toContain("COMANDA #42");
     expect(body).toContain("TAVOLO 7 - Terrazza");
+    expect(body).toContain("PIZZERIA");
     expect(body).toContain("2x R Pinsa Margherita");
-    expect(body).toContain("CAMERIERE: Andre");
+    expect(body).not.toContain("CAMERIERE:");
     expect(ticket.subarray(-4)).toEqual(Buffer.from([0x1d, 0x56, 0x41, 0x10]));
   });
 
@@ -98,7 +99,6 @@ describe("buildRaw80mmTicket", () => {
 
     expect(body).toContain("NUOVA COMANDA");
     expect(body).toContain("TAVOLO 7");
-    expect(body).toContain("COPERTI: 2");
     expect(body).toContain("2x R Pinsa Margherita");
     expect(body).toContain("NOTA: ben cotta");
     expect(body).toContain("+ 1x Mozzarella");
@@ -109,6 +109,7 @@ describe("buildRaw80mmTicket", () => {
     expect(body).not.toContain("23.80");
     expect(body).not.toContain("10.00");
     expect(body).not.toContain("1.50");
+    expect(body).not.toContain("COPERTI:");
   });
 
   it("stampa una sola riga con la quantità totale per prodotti uguali", () => {
@@ -150,5 +151,57 @@ describe("buildRaw80mmTicket", () => {
     expect(body).toContain("NOTE ORDINE:");
     expect(body).not.toContain("TAVOLO");
     expect(body).not.toContain("COPERTI:");
+  });
+
+  it("produce una comanda distinta per reparto senza mescolare i prodotti", () => {
+    const multiDepartmentOrder: Order = {
+      ...order,
+      items: [
+        order.items![0],
+        {
+          ...order.items![0],
+          id: "item-2",
+          menu_item_id: "tagliere",
+          item_name_snapshot: "Tagliere misto",
+          preparation_area_snapshot: "cucina",
+          category_slug: "antipasti",
+          notes: "Senza salumi",
+          extras: [],
+        },
+        {
+          ...order.items![0],
+          id: "item-3",
+          menu_item_id: "acqua",
+          item_name_snapshot: "Acqua",
+          preparation_area_snapshot: "bar",
+          category_slug: "bevande",
+          notes: "",
+          extras: [],
+        },
+      ],
+    };
+
+    const departments = buildRaw80mmTicket(
+      multiDepartmentOrder,
+      "new_order",
+    )
+      .toString("ascii")
+      .split("\u001dVA\u0010")
+      .filter(Boolean);
+
+    expect(departments).toHaveLength(3);
+    expect(departments[0]).toContain("PIZZERIA");
+    expect(departments[0]).toContain("Pinsa Margherita");
+    expect(departments[0]).not.toContain("Tagliere misto");
+    expect(departments[0]).not.toContain("Acqua");
+
+    expect(departments[1]).toContain("CUCINA / TAGLIERI");
+    expect(departments[1]).toContain("Tagliere misto");
+    expect(departments[1]).toContain("NOTA: Senza salumi");
+    expect(departments[1]).not.toContain("Pinsa Margherita");
+
+    expect(departments[2]).toContain("BEVANDE");
+    expect(departments[2]).toContain("Acqua");
+    expect(departments[2]).not.toContain("Tagliere misto");
   });
 });

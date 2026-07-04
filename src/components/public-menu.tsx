@@ -25,14 +25,21 @@ export function PublicMenu() {
     const supabase = createClient();
     const [settings, categories, items, extras] = await Promise.all([
       supabase.from("restaurant_settings").select("*").limit(1).maybeSingle(),
-      supabase.from("menu_categories").select("*").eq("active", true).order("sort_order"),
+      supabase
+        .from("menu_categories")
+        .select("*")
+        .eq("active", true)
+        .order("sort_order")
+        .order("name"),
       supabase
         .from("menu_items")
         .select("*")
         .eq("active", true)
         .eq("available", true)
         .eq("visible_public", true)
-        .order("sort_order"),
+        .order("category_id")
+        .order("sort_order")
+        .order("name"),
       supabase
         .from("menu_extras")
         .select("*")

@@ -6,7 +6,10 @@ import { PrintTicket } from "@/components/print-ticket";
 import { ServiceControl } from "@/components/service-control";
 import { formatCurrency, formatDateTime, formatTime } from "@/lib/format";
 import { getOrderLocationLabel, getOrderShortLabel } from "@/lib/order-display";
-import { aggregateIdenticalOrderItems } from "@/lib/order-items";
+import {
+  aggregateIdenticalOrderItems,
+  groupOrderItemsByPreparationArea,
+} from "@/lib/order-items";
 import {
   canSafelyCancelPrintJob,
   getPrintJobDisplayState,
@@ -21,7 +24,6 @@ import type {
   PrintJob,
   PrintJobType,
   Profile,
-  RestaurantSettings,
   RestaurantTable,
 } from "@/types/domain";
 
@@ -79,7 +81,6 @@ export function CashierDashboard() {
   const [waiterFilter, setWaiterFilter] = useState("");
   const [selected, setSelected] = useState<SelectedTicket | null>(null);
   const [printer, setPrinter] = useState<PrinterStatus | null>(null);
-  const [settings, setSettings] = useState<RestaurantSettings | null>(null);
   const [message, setMessage] = useState("");
   const [closingOrderId, setClosingOrderId] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<PrintConfirmation | null>(null);
@@ -93,7 +94,7 @@ export function CashierDashboard() {
 
   const load = useCallback(async () => {
     const supabase = createClient();
-    const [activeOrdersResult, tablesResult, profilesResult, jobsResult, settingsResult] = await Promise.all([
+    const [activeOrdersResult, tablesResult, profilesResult, jobsResult] = await Promise.all([
       supabase.from("orders").select("*").in("status", ACTIVE).order("created_at"),
       supabase.from("restaurant_tables").select("*"),
       supabase.from("profiles").select("id, full_name, role, active"),
@@ -102,14 +103,12 @@ export function CashierDashboard() {
         .select("*")
         .order("created_at", { ascending: false })
         .limit(200),
-      supabase.from("restaurant_settings").select("*").limit(1).maybeSingle(),
     ]);
     const firstError =
       activeOrdersResult.error ??
       tablesResult.error ??
       profilesResult.error ??
-      jobsResult.error ??
-      settingsResult.error;
+      jobsResult.error;
     if (firstError) {
       if (!firstError.code) markUnreliable();
       setLoading(false);
@@ -162,7 +161,6 @@ export function CashierDashboard() {
       })),
     );
     setJobs(rawJobs);
-    setSettings(settingsResult.data as RestaurantSettings | null);
     setLoading(false);
   }, [markUnreliable]);
 
@@ -355,8 +353,8 @@ export function CashierDashboard() {
                     )}
                   </div>
                   <p>
-                    {order ? getOrderShortLabel(order) : "Ordine —"} · {job.copies}{" "}
-                    {job.copies === 1 ? "copia" : "copie"}
+                    {order ? getOrderShortLabel(order) : "Ordine —"} · comande
+                    separate per reparto
                     {job.printnode_job_id ? ` · PrintNode #${job.printnode_job_id}` : ""}
                     {job.last_attempt_at
                       ? ` · ultimo tentativo ${formatDateTime(job.last_attempt_at)}`
@@ -585,11 +583,12 @@ export function CashierDashboard() {
               </p>
             )}
             <div className="ticket-preview print-area">
-              {Array.from({ length: getPreviewCopies(selected, jobs, settings) }, (_, index) => (
+              {groupOrderItemsByPreparationArea(selected.order.items ?? []).map((department) => (
                 <PrintTicket
+                  department={department}
                   order={selected.order}
                   label={JOB_LABELS[selected.type]}
-                  key={index}
+                  key={department.area}
                 />
               ))}
             </div>
@@ -1124,21 +1123,4 @@ function isCurrentServiceJob(
 
 function formatOptionalDate(value: string | null) {
   return value ? formatDateTime(value) : "—";
-}
-
-function getPreviewCopies(
-  selected: SelectedTicket,
-  jobs: PrintJob[],
-  settings: RestaurantSettings | null,
-) {
-  const job = jobs.find(
-    (candidate) =>
-      candidate.order_id === selected.order.id &&
-      candidate.job_type === selected.type,
-  );
-  if (job) return job.copies;
-  if (selected.order.order_type === "takeaway") {
-    return settings?.takeaway_print_copies ?? 1;
-  }
-  return settings?.dine_in_print_copies ?? 3;
 }

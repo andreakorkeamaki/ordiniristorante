@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useConnection } from "@/components/connection-provider";
 import { formatCurrency } from "@/lib/format";
+import {
+  reorderCategoryMenuItems,
+  type DropPlacement,
+} from "@/lib/menu-ordering";
 import { createClient } from "@/lib/supabase/client";
 import type {
   MenuCategory,
@@ -15,6 +19,10 @@ import type {
 
 type Tab = "menu" | "extras" | "tables" | "settings";
 type Feedback = { text: string; type: "success" | "error" };
+type ProductDropTarget = {
+  itemId: string;
+  placement: DropPlacement;
+};
 
 export function AdminDashboard() {
   const { canWrite, blockReason, markUnreliable } = useConnection();
@@ -27,13 +35,24 @@ export function AdminDashboard() {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [draggedProduct, setDraggedProduct] = useState<{
+    categoryId: string;
+    itemId: string;
+  } | null>(null);
+  const [productDropTarget, setProductDropTarget] =
+    useState<ProductDropTarget | null>(null);
   const feedbackTimer = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     const supabase = createClient();
     const [categoryResult, itemResult, extraResult, tableResult, settingsResult] = await Promise.all([
-      supabase.from("menu_categories").select("*").order("sort_order"),
-      supabase.from("menu_items").select("*").order("sort_order"),
+      supabase.from("menu_categories").select("*").order("sort_order").order("name"),
+      supabase
+        .from("menu_items")
+        .select("*")
+        .order("category_id")
+        .order("sort_order")
+        .order("name"),
       supabase.from("menu_extras").select("*").order("sort_order"),
       supabase.from("restaurant_tables").select("*").order("table_number"),
       supabase.from("restaurant_settings").select("*").limit(1).maybeSingle(),
@@ -145,11 +164,47 @@ export function AdminDashboard() {
               <button className="button button-primary">{saving ? "Salvataggio…" : "Crea prodotto"}</button>
             </form>
             <div className="admin-list product-admin-list">
-              {categories.filter((category) => category.slug !== "extra").map((category) => (
-                <section key={category.id}>
-                  <h3 className="admin-group-title">{category.name}</h3>
-                  {items.filter((item) => item.category_id === category.id).map((item) => (
-                    <form className="product-admin-row" key={item.id} onSubmit={(event) => void saveProduct(event, item.id)}>
+              {categories.filter((category) => category.slug !== "extra").map((category) => {
+                const categoryItems = items.filter(
+                  (item) => item.category_id === category.id,
+                );
+                return (
+                  <section key={category.id}>
+                    <h3 className="admin-group-title">{category.name}</h3>
+                    {categoryItems.map((item, index) => (
+                      <form
+                        className={`product-admin-row ${
+                          productDropTarget?.itemId === item.id
+                            ? `drop-${productDropTarget.placement}`
+                            : ""
+                        }`}
+                        key={item.id}
+                        onDragOver={(event) =>
+                          handleProductDragOver(event, category.id, item.id)
+                        }
+                        onDrop={(event) =>
+                          void handleProductDrop(event, category.id, item.id)
+                        }
+                        onSubmit={(event) => void saveProduct(event, item.id)}
+                      >
+                      <button
+                        aria-label={`Trascina ${item.name}`}
+                        className="product-drag-handle"
+                        draggable
+                        onDragEnd={clearProductDrag}
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData("text/plain", item.id);
+                          setDraggedProduct({
+                            categoryId: category.id,
+                            itemId: item.id,
+                          });
+                        }}
+                        title="Trascina per riordinare"
+                        type="button"
+                      >
+                        ⠿
+                      </button>
                       <input name="name" defaultValue={item.name} aria-label="Nome" />
                       <input name="price" type="number" min="0" step="0.01" defaultValue={item.price} aria-label="Prezzo" />
                       <input name="ingredients" defaultValue={item.ingredients ?? ""} placeholder="Ingredienti" aria-label="Ingredienti" />
@@ -160,11 +215,42 @@ export function AdminDashboard() {
                       <label className="check-label"><input name="available" type="checkbox" defaultChecked={item.available} /> Disponibile</label>
                       <label className="check-label"><input name="visible_public" type="checkbox" defaultChecked={item.visible_public} /> QR</label>
                       <label className="check-label"><input name="visible_staff" type="checkbox" defaultChecked={item.visible_staff} /> Staff</label>
+                      <div className="product-order-actions">
+                        <button
+                          disabled={index === 0}
+                          onClick={() =>
+                            void moveProduct(
+                              category.id,
+                              item.id,
+                              categoryItems[index - 1]?.id,
+                              "before",
+                            )
+                          }
+                          type="button"
+                        >
+                          Sposta su
+                        </button>
+                        <button
+                          disabled={index === categoryItems.length - 1}
+                          onClick={() =>
+                            void moveProduct(
+                              category.id,
+                              item.id,
+                              categoryItems[index + 1]?.id,
+                              "after",
+                            )
+                          }
+                          type="button"
+                        >
+                          Sposta giù
+                        </button>
+                      </div>
                       <button className="button button-secondary">{saving ? "Salvataggio…" : "Salva"}</button>
-                    </form>
-                  ))}
-                </section>
-              ))}
+                      </form>
+                    ))}
+                  </section>
+                );
+              })}
             </div>
           </section>
         </div>
@@ -217,38 +303,13 @@ export function AdminDashboard() {
           <div className="panel-title"><div><p className="eyebrow">Locale</p><h2>Impostazioni</h2></div></div>
           <label>Nome locale<input name="restaurant_name" defaultValue={settings.restaurant_name} required /></label>
           <label>Coperto<input name="cover_charge" type="number" min="0" step="0.01" defaultValue={settings.cover_charge} required /></label>
-          <fieldset className="copy-setting">
-            <legend>Copie comande tavoli</legend>
-            <div className="copy-options">
-              {[1, 2, 3].map((copies) => (
-                <label key={copies}>
-                  <input
-                    name="dine_in_print_copies"
-                    type="radio"
-                    value={copies}
-                    defaultChecked={settings.dine_in_print_copies === copies}
-                  />
-                  {copies}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          <fieldset className="copy-setting">
-            <legend>Copie comande asporto</legend>
-            <div className="copy-options">
-              {[1, 2, 3].map((copies) => (
-                <label key={copies}>
-                  <input
-                    name="takeaway_print_copies"
-                    type="radio"
-                    value={copies}
-                    defaultChecked={settings.takeaway_print_copies === copies}
-                  />
-                  {copies}
-                </label>
-              ))}
-            </div>
-          </fieldset>
+          <div className="department-print-setting">
+            <strong>Comande per reparto</strong>
+            <p>
+              La stampa genera automaticamente un foglio separato per ogni reparto
+              coinvolto nell’ordine.
+            </p>
+          </div>
           <label>Avviso allergeni<textarea name="allergen_notice" defaultValue={settings.allergen_notice ?? ""} /></label>
           <label>Testo finale ticket<textarea name="ticket_footer" defaultValue={settings.ticket_footer ?? ""} /></label>
           <button className="button button-primary">
@@ -362,12 +423,9 @@ export function AdminDashboard() {
   async function saveSettings(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    const allergenNotice = String(data.get("allergen_notice")) || null;
     await execute(() => createClient().from("restaurant_settings").update({
       restaurant_name: String(data.get("restaurant_name")),
       cover_charge: Number(data.get("cover_charge")),
-      dine_in_print_copies: Number(data.get("dine_in_print_copies")),
-      takeaway_print_copies: Number(data.get("takeaway_print_copies")),
       allergen_notice: String(data.get("allergen_notice")) || null,
       ticket_footer: String(data.get("ticket_footer")) || null,
     }).eq("id", settings!.id));
@@ -400,7 +458,108 @@ export function AdminDashboard() {
     if (!second.error) await load();
   }
 
+  function handleProductDragOver(
+    event: React.DragEvent<HTMLFormElement>,
+    categoryId: string,
+    itemId: string,
+  ) {
+    if (
+      !draggedProduct ||
+      draggedProduct.categoryId !== categoryId ||
+      draggedProduct.itemId === itemId
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const placement =
+      event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+    setProductDropTarget({ itemId, placement });
+  }
+
+  async function handleProductDrop(
+    event: React.DragEvent<HTMLFormElement>,
+    categoryId: string,
+    itemId: string,
+  ) {
+    if (!draggedProduct || draggedProduct.categoryId !== categoryId) return;
+    event.preventDefault();
+    const placement =
+      productDropTarget?.itemId === itemId
+        ? productDropTarget.placement
+        : "before";
+    const movedItemId = draggedProduct.itemId;
+    clearProductDrag();
+    await moveProduct(categoryId, movedItemId, itemId, placement);
+  }
+
+  function clearProductDrag() {
+    setDraggedProduct(null);
+    setProductDropTarget(null);
+  }
+
+  async function moveProduct(
+    categoryId: string,
+    movedItemId: string,
+    targetItemId: string | undefined,
+    placement: DropPlacement,
+  ) {
+    if (!targetItemId || saving) return;
+    if (!canWrite) {
+      setFeedback({
+        text: blockReason ?? "Connessione non verificata. Modifica non eseguita.",
+        type: "error",
+      });
+      return;
+    }
+
+    const categoryItems = items.filter(
+      (item) => item.category_id === categoryId,
+    );
+    const reordered = reorderCategoryMenuItems(
+      categoryItems,
+      movedItemId,
+      targetItemId,
+      placement,
+    );
+    if (reordered === categoryItems) return;
+
+    const previousItems = items;
+    setItems(replaceCategoryItems(items, categoryId, reordered));
+    setSaving(true);
+    try {
+      const { error } = await createClient().rpc("reorder_menu_items", {
+        p_category_id: categoryId,
+        p_item_ids: reordered.map((item) => item.id),
+      });
+      if (error) {
+        if (!error.code) markUnreliable();
+        setItems(previousItems);
+        setFeedback({ text: error.message, type: "error" });
+        return;
+      }
+      setFeedback({ text: "Ordine prodotti salvato", type: "success" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function toggle(table: string, id: string, field: string, value: boolean) {
     await execute(() => createClient().from(table).update({ [field]: value }).eq("id", id));
   }
+}
+
+function replaceCategoryItems(
+  items: MenuItem[],
+  categoryId: string,
+  reordered: MenuItem[],
+) {
+  let categoryIndex = 0;
+  return items.map((item) =>
+    item.category_id === categoryId
+      ? reordered[categoryIndex++]
+      : item,
+  );
 }

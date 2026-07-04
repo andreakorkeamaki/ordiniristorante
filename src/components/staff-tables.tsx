@@ -10,27 +10,35 @@ import {
   formatServiceLabel,
   isPreviousService,
 } from "@/lib/service-management";
+import {
+  groupOrderItemsByPreparationArea,
+} from "@/lib/order-items";
+import { getPrintJobStatusLabel } from "@/lib/print-job-state";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentService } from "@/hooks/use-current-service";
 import type {
   Order,
+  PrintJob,
   Profile,
   RestaurantService,
   RestaurantTable,
 } from "@/types/domain";
+
+type StaffOrder = Order & { print_jobs?: PrintJob[] };
 
 export function StaffTables({ profile }: { profile: Profile }) {
   const router = useRouter();
   const { canWrite, blockReason, markUnreliable } = useConnection();
   const { service, loading: serviceLoading } = useCurrentService();
   const [tables, setTables] = useState<RestaurantTable[]>([]);
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [orders, setOrders] = useState<StaffOrder[]>([]);
   const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [showTakeawayForm, setShowTakeawayForm] = useState(false);
   const [creatingTakeaway, setCreatingTakeaway] = useState(false);
   const [takeawayError, setTakeawayError] = useState("");
+  const [takeawaysOpen, setTakeawaysOpen] = useState(true);
   const [reprintTarget, setReprintTarget] = useState<Order | null>(null);
   const [reprintingOrderId, setReprintingOrderId] = useState<string | null>(null);
   const [reprintMessage, setReprintMessage] = useState("");
@@ -38,9 +46,18 @@ export function StaffTables({ profile }: { profile: Profile }) {
   const load = useCallback(async () => {
     if (serviceLoading) return;
     const supabase = createClient();
+    const ordersQuery = supabase
+      .from("orders")
+      .select(
+        "*, items:order_items(*, extras:order_item_extras(*)), print_jobs(*)",
+      )
+      .in("status", [...ACTIVE_ORDER_STATUSES]);
+    if (profile.role === "waiter") {
+      ordersQuery.eq("order_type", "dine_in");
+    }
     const [tablesResult, ordersResult, profilesResult] = await Promise.all([
       supabase.from("restaurant_tables").select("*").eq("active", true).order("table_number"),
-      supabase.from("orders").select("*").in("status", [...ACTIVE_ORDER_STATUSES]),
+      ordersQuery,
       supabase.from("profiles").select("id, full_name, role, active").eq("active", true),
     ]);
     const error = tablesResult.error ?? ordersResult.error ?? profilesResult.error;
@@ -53,7 +70,7 @@ export function StaffTables({ profile }: { profile: Profile }) {
     setTables((tablesResult.data ?? []) as RestaurantTable[]);
     setOrders(
       service
-        ? ((ordersResult.data ?? []) as Order[]).filter(
+        ? ((ordersResult.data ?? []) as StaffOrder[]).filter(
             (order) => order.service_id === service.id,
           )
         : [],
@@ -64,7 +81,7 @@ export function StaffTables({ profile }: { profile: Profile }) {
       ),
     );
     setLoading(false);
-  }, [markUnreliable, service, serviceLoading]);
+  }, [markUnreliable, profile.role, service, serviceLoading]);
 
   useEffect(() => {
     queueMicrotask(() => void load());
@@ -92,6 +109,7 @@ export function StaffTables({ profile }: { profile: Profile }) {
       .toLowerCase()
       .includes(query.toLowerCase()),
   );
+  const canManageTakeaways = ["cashier", "admin"].includes(profile.role);
   const takeaways = orders
     .filter((order) => order.order_type === "takeaway")
     .filter((order) =>
@@ -99,10 +117,15 @@ export function StaffTables({ profile }: { profile: Profile }) {
         .toLowerCase()
         .includes(query.toLowerCase()),
     )
-    .sort((first, second) =>
-      new Date(first.takeaway_pickup_at ?? first.created_at).getTime() -
-      new Date(second.takeaway_pickup_at ?? second.created_at).getTime(),
-    );
+    .sort((first, second) => {
+      const statusDifference =
+        takeawayStatusPriority(first) - takeawayStatusPriority(second);
+      if (statusDifference) return statusDifference;
+      return (
+        new Date(first.takeaway_pickup_at ?? first.created_at).getTime() -
+        new Date(second.takeaway_pickup_at ?? second.created_at).getTime()
+      );
+    });
   const dineInOrders = orders.filter((order) => order.order_type === "dine_in");
   const serviceOperational = Boolean(service && !isPreviousService(service));
 
@@ -115,16 +138,17 @@ export function StaffTables({ profile }: { profile: Profile }) {
       <section className="workspace-heading">
         <div>
           <p className="eyebrow">Sala</p>
-          <h1>Tavoli e asporti</h1>
+          <h1>{canManageTakeaways ? "Tavoli e asporti" : "Tavoli"}</h1>
           <p>
-            {dineInOrders.length} tavoli attivi · {takeaways.length} asporti ·{" "}
+            {dineInOrders.length} tavoli attivi
+            {canManageTakeaways ? ` · ${takeaways.length} asporti` : ""} ·{" "}
             {tables.length - dineInOrders.length} liberi
           </p>
         </div>
         <label className="compact-search">
           <span>⌕</span>
           <input
-            placeholder="Cerca tavolo o asporto"
+            placeholder={canManageTakeaways ? "Cerca tavolo o asporto" : "Cerca tavolo"}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -159,12 +183,18 @@ export function StaffTables({ profile }: { profile: Profile }) {
         </button>
       )}
 
-      <section className="takeaway-section">
+      {canManageTakeaways && <section className="takeaway-section">
         <div className="takeaway-section-heading">
-          <div>
+          <button
+            aria-expanded={takeawaysOpen}
+            className="takeaway-collapse"
+            onClick={() => setTakeawaysOpen((current) => !current)}
+            type="button"
+          >
             <p className="eyebrow">Ritiro</p>
-            <h2>Asporti</h2>
-          </div>
+            <h2>Asporti ({takeaways.length})</h2>
+            <span aria-hidden="true">{takeawaysOpen ? "−" : "+"}</span>
+          </button>
           <button
             className="button button-primary"
             disabled={!canWrite || !serviceOperational}
@@ -177,9 +207,16 @@ export function StaffTables({ profile }: { profile: Profile }) {
           </button>
         </div>
         {!canWrite && <p className="form-error">{blockReason}</p>}
-        <div className="takeaway-grid">
+        {takeawaysOpen && <div className="takeaway-grid">
           {takeaways.length ? takeaways.map((order) => {
             const updater = profiles.get(order.updated_by);
+            const latestPrintJob = [...(order.print_jobs ?? [])].sort(
+              (first, second) =>
+                new Date(second.created_at).getTime() -
+                new Date(first.created_at).getTime(),
+            )[0];
+            const orderItems = groupOrderItemsByPreparationArea(order.items ?? [])
+              .flatMap((department) => department.items);
             return (
               <Link
                 className={`takeaway-card status-${order.status}`}
@@ -196,7 +233,26 @@ export function StaffTables({ profile }: { profile: Profile }) {
                     : "Ora da definire"}
                 </time>
                 <span className="status-label">{ORDER_STATUS_LABELS[order.status]}</span>
-                <b>{formatCurrency(order.total)}</b>
+                {latestPrintJob && (
+                  <span className="takeaway-print-status">
+                    Stampa: {getPrintJobStatusLabel(latestPrintJob)}
+                  </span>
+                )}
+                {orderItems.length > 0 && (
+                  <ul className="takeaway-products">
+                    {orderItems.map((item) => (
+                      <li key={item.id}>
+                        <strong>{item.quantity}×</strong> {item.item_name_snapshot}
+                        {item.notes && <small>{item.notes}</small>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {order.general_notes && (
+                  <p className="takeaway-note">
+                    <strong>Nota:</strong> {order.general_notes}
+                  </p>
+                )}
                 <small>
                   Aggiornato {formatDateTime(order.updated_at)}
                   {updater ? ` · ${updater.full_name}` : ""}
@@ -206,8 +262,8 @@ export function StaffTables({ profile }: { profile: Profile }) {
           }) : (
             <p className="column-empty">Nessun asporto attivo</p>
           )}
-        </div>
-      </section>
+        </div>}
+      </section>}
 
       <section className="tables-grid" aria-label="Elenco tavoli">
         {filtered.map((table) => {
@@ -404,6 +460,18 @@ function getCurrentLocalDateTime() {
   const now = new Date();
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);
+}
+
+function takeawayStatusPriority(order: Order) {
+  return {
+    draft: 0,
+    pending_cashier: 1,
+    confirmed: 2,
+    in_preparation: 3,
+    bill_requested: 4,
+    closed: 5,
+    cancelled: 6,
+  }[order.status];
 }
 
 function TableCard({

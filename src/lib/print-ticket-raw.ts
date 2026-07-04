@@ -1,6 +1,9 @@
 import type { Order, PrintJobType } from "@/types/domain";
 import { getOrderLocationLabel } from "@/lib/order-display";
-import { aggregateIdenticalOrderItems } from "@/lib/order-items";
+import {
+  groupOrderItemsByPreparationArea,
+  type PreparationAreaGroup,
+} from "@/lib/order-items";
 
 export const PRINT_JOB_LABELS: Record<PrintJobType, string> = {
   new_order: "NUOVA COMANDA",
@@ -53,7 +56,11 @@ export function getPinsaPrintPrefix(categorySlug: string | null | undefined) {
   return "";
 }
 
-export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
+function buildRaw80mmDepartmentTicket(
+  order: Order,
+  jobType: PrintJobType,
+  department: PreparationAreaGroup,
+) {
   const locationLabel = getOrderLocationLabel(order).replace(" · ", " - ");
   const chunks: Buffer[] = [
     Buffer.from([0x1b, 0x40]),
@@ -61,6 +68,7 @@ export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
     DOUBLE_TEXT_SIZE,
     text("LA SAGRETTA"),
     text(PRINT_JOB_LABELS[jobType]),
+    text(department.label),
     text(`COMANDA #${order.order_number}`),
     Buffer.from([0x1b, 0x61, 0x00]),
     text("-".repeat(LINE_WIDTH)),
@@ -83,11 +91,10 @@ export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
         minute: "2-digit",
       })}`,
     ),
-    text(`CAMERIERE: ${order.waiter?.full_name ?? "-"}`),
     text("-".repeat(LINE_WIDTH)),
   ];
 
-  for (const item of aggregateIdenticalOrderItems(order.items ?? [])) {
+  for (const item of department.items) {
     const prefix = getPinsaPrintPrefix(item.category_slug);
     const itemName = prefix
       ? `${prefix} ${item.item_name_snapshot}`
@@ -115,8 +122,8 @@ export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
 
   chunks.push(
     text("-".repeat(LINE_WIDTH)),
-    ...(order.order_type === "dine_in" ? [text(`COPERTI: ${order.cover_count}`)] : []),
     Buffer.from([0x1b, 0x61, 0x01]),
+    text(department.label),
     text(PRINT_JOB_LABELS[jobType]),
     text(""),
     text(""),
@@ -124,4 +131,12 @@ export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
   );
 
   return Buffer.concat(chunks);
+}
+
+export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
+  return Buffer.concat(
+    groupOrderItemsByPreparationArea(order.items ?? []).map((department) =>
+      buildRaw80mmDepartmentTicket(order, jobType, department),
+    ),
+  );
 }
