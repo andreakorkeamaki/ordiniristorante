@@ -1,5 +1,5 @@
 begin;
-select plan(141);
+select plan(145);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -696,6 +696,58 @@ select is(
 );
 
 set local role authenticated;
+
+select results_eq(
+  $$
+    update public.print_jobs
+    set status = 'printing',
+        printnode_job_id = 990003,
+        processing_started_at = now(),
+        submitted_at = now(),
+        last_attempt_at = now(),
+        retry_count = retry_count + 1
+    where order_id = '00000000-0000-4000-9000-000000009923'
+      and job_type = 'new_order'
+      and status = 'pending'
+    returning status::text
+  $$,
+  $$values ('printing')$$,
+  'a waiter can start the automatic print state flow'
+);
+select lives_ok(
+  $$
+    select public.record_printnode_state(
+      (
+        select id
+        from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009923'
+          and job_type = 'new_order'
+      ),
+      'done',
+      null
+    )
+  $$,
+  'a waiter can record PrintNode completion for their own order'
+);
+select is(
+  (
+    select status::text
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009923'
+      and job_type = 'new_order'
+  ),
+  'printed',
+  'waiter PrintNode completion marks the print job printed'
+);
+select is(
+  (
+    select status::text
+    from public.orders
+    where id = '00000000-0000-4000-9000-000000009923'
+  ),
+  'in_preparation',
+  'waiter PrintNode completion moves the order to preparation'
+);
 
 select results_eq(
   $$
