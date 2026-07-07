@@ -6,7 +6,10 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const supabase = await createClient();
   if (!supabase) {
-    return NextResponse.json({ ok: false }, { status: 503 });
+    return NextResponse.json(
+      { ok: false, code: "supabase_not_configured" },
+      { status: 503 },
+    );
   }
 
   const {
@@ -14,7 +17,10 @@ export async function GET() {
     error: authError,
   } = await supabase.auth.getUser();
   if (authError) {
-    return NextResponse.json({ ok: false }, { status: 503 });
+    return NextResponse.json(
+      { ok: false, code: "supabase_unreachable" },
+      { status: 503 },
+    );
   }
   if (!user) {
     return NextResponse.json({ ok: false }, { status: 401 });
@@ -27,7 +33,10 @@ export async function GET() {
     .maybeSingle();
 
   if (profileError) {
-    return NextResponse.json({ ok: false }, { status: 503 });
+    return NextResponse.json(
+      { ok: false, code: "supabase_unreachable" },
+      { status: 503 },
+    );
   }
   if (!profile?.active) {
     return NextResponse.json({ ok: false }, { status: 403 });

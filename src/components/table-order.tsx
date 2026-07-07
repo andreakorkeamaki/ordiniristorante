@@ -44,8 +44,18 @@ export function TableOrder({
   profile: Profile;
 }) {
   const takeawayMode = Boolean(requestedOrderId);
-  const { status, canWrite, blockReason, markUnreliable } = useConnection();
-  const { service, loading: serviceLoading } = useCurrentService();
+  const {
+    status,
+    canWrite: connectionCanWrite,
+    blockReason,
+    markUnreliable,
+  } = useConnection();
+  const {
+    service,
+    loading: serviceLoading,
+    error: serviceError,
+    state: serviceState,
+  } = useCurrentService();
   const [table, setTable] = useState<RestaurantTable | null>(null);
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
@@ -65,9 +75,18 @@ export function TableOrder({
   const baseLoaded = useRef(false);
   const loadedSuccessfully = useRef(false);
   const wasBlocked = useRef(false);
+  const orderLoadGeneration = useRef(0);
+  const baseLoadGeneration = useRef(0);
+  const [dataState, setDataState] = useState<"loading" | "ready" | "stale" | "error">(
+    "loading",
+  );
+  const [loadError, setLoadError] = useState("");
+  const canWrite =
+    connectionCanWrite && dataState === "ready" && serviceState === "ready";
 
   const loadOrder = useCallback(
     async (create = false) => {
+      const generation = ++orderLoadGeneration.current;
       const supabase = createClient();
       let currentOrder: Order | null = null;
 
@@ -80,7 +99,10 @@ export function TableOrder({
           .in("status", ["draft", "pending_cashier", "confirmed", "in_preparation", "bill_requested"])
           .maybeSingle();
         if (error) {
+          if (generation !== orderLoadGeneration.current) return;
           setSaving("error");
+          setLoadError("Ordine non aggiornato. Le modifiche restano bloccate.");
+          setDataState(loadedSuccessfully.current ? "stale" : "error");
           if (isConnectionFailure(error)) markUnreliable();
           setLoading(false);
           return;
@@ -91,7 +113,10 @@ export function TableOrder({
           p_table_id: tableId,
         });
         if (error) {
+          if (generation !== orderLoadGeneration.current) return;
           setSaving("error");
+          setLoadError("Creazione ordine non confermata dal server.");
+          setDataState(loadedSuccessfully.current ? "stale" : "error");
           if (isConnectionFailure(error)) markUnreliable();
           setLoading(false);
           return;
@@ -105,7 +130,10 @@ export function TableOrder({
           .in("status", ["draft", "pending_cashier", "confirmed", "in_preparation", "bill_requested"])
           .maybeSingle();
         if (error) {
+          if (generation !== orderLoadGeneration.current) return;
           setSaving("error");
+          setLoadError("Ordine non aggiornato. Le modifiche restano bloccate.");
+          setDataState(loadedSuccessfully.current ? "stale" : "error");
           if (isConnectionFailure(error)) markUnreliable();
           setLoading(false);
           return;
@@ -114,10 +142,13 @@ export function TableOrder({
       }
 
       if (!currentOrder) {
+        if (generation !== orderLoadGeneration.current) return;
         setOrder(null);
         setItems([]);
         setUpdatePrintStatus(null);
         setLoading(false);
+        setLoadError("");
+        setDataState("ready");
         return;
       }
 
@@ -138,11 +169,15 @@ export function TableOrder({
       ]);
       const loadError = linesResult.error ?? updateJobResult.error;
       if (loadError) {
+        if (generation !== orderLoadGeneration.current) return;
         setSaving("error");
+        setLoadError("Righe ordine non aggiornate. Lo snapshot precedente resta visibile.");
+        setDataState(loadedSuccessfully.current ? "stale" : "error");
         if (isConnectionFailure(loadError)) markUnreliable();
         setLoading(false);
         return;
       }
+      if (generation !== orderLoadGeneration.current) return;
       setOrder(currentOrder);
       setItems((linesResult.data ?? []) as OrderItem[]);
       setUpdatePrintStatus(
@@ -150,12 +185,15 @@ export function TableOrder({
       );
       setSaving("saved");
       loadedSuccessfully.current = true;
+      setLoadError("");
+      setDataState("ready");
       setLoading(false);
     },
     [markUnreliable, requestedOrderId, tableId, takeawayMode],
   );
 
   const loadBase = useCallback(async (createOrder: boolean) => {
+    const generation = ++baseLoadGeneration.current;
     const supabase = createClient();
     const [tableResult, categoryResult, itemResult, extraResult] = await Promise.all([
       tableId
@@ -180,11 +218,15 @@ export function TableOrder({
     const firstError =
       tableResult.error ?? categoryResult.error ?? itemResult.error ?? extraResult.error;
     if (firstError) {
+      if (generation !== baseLoadGeneration.current) return;
       if (isConnectionFailure(firstError)) markUnreliable();
       setSaving("error");
+      setLoadError("Menu o dati tavolo non disponibili. Riprova.");
+      setDataState(baseLoaded.current ? "stale" : "error");
       setLoading(false);
       return;
     }
+    if (generation !== baseLoadGeneration.current) return;
 
     const loadedCategories = (categoryResult.data ?? []) as MenuCategory[];
     setTable((tableResult.data as RestaurantTable | null) ?? null);
@@ -368,8 +410,27 @@ export function TableOrder({
     [items],
   );
 
+  if (serviceState === "error") {
+    return (
+      <section className="empty-card" role="alert">
+        <h1>Stato del servizio non disponibile</h1>
+        <p>{serviceError || "Riprova quando la connessione dati è affidabile."}</p>
+      </section>
+    );
+  }
   if (loading || status === "checking" || serviceLoading) {
     return <div className="loader" aria-label="Caricamento comanda" />;
+  }
+  if (dataState === "error") {
+    return (
+      <section className="empty-card" role="alert">
+        <h1>Dati comanda non disponibili</h1>
+        <p>{loadError}</p>
+        <button className="button button-primary" onClick={() => void loadBase(false)}>
+          Riprova
+        </button>
+      </section>
+    );
   }
   if (!order || (!takeawayMode && !table)) {
     const serviceMessage = !service
@@ -402,7 +463,9 @@ export function TableOrder({
   const serviceOperational = Boolean(service && !isPreviousService(service));
   const operationsEnabled = canWrite && serviceOperational;
   const operationalBlockReason = !canWrite
-    ? blockReason
+    ? blockReason ??
+      serviceError ??
+      "Dati non aggiornati. Le modifiche restano bloccate."
     : !service
       ? "Nessun servizio aperto."
       : !serviceOperational
@@ -435,6 +498,14 @@ export function TableOrder({
 
   return (
     <>
+      {dataState === "stale" && (
+        <section className="connection-action-hint" role="alert">
+          <strong>Snapshot non aggiornato.</strong> {loadError}
+          <button className="text-button" onClick={() => void loadOrder()}>
+            Riprova
+          </button>
+        </section>
+      )}
       <section className="order-heading">
         <div>
           <Link
@@ -594,6 +665,7 @@ export function TableOrder({
                 <input
                   className="line-note"
                   defaultValue={item.notes}
+                  maxLength={300}
                   disabled={!writeEnabled}
                   placeholder="Nota sulla riga…"
                   onBlur={(event) => {
@@ -637,6 +709,7 @@ export function TableOrder({
           <label className="general-note">
             Nota generale
             <textarea
+              maxLength={500}
               defaultValue={order.general_notes}
               disabled={!writeEnabled}
               placeholder="Es. portare tutto insieme…"
@@ -687,6 +760,10 @@ export function TableOrder({
   );
 
   async function saveDetails(covers: number, notes = order!.general_notes) {
+    if (notes.length > 500) {
+      setMutationError("La nota ordine non può superare 500 caratteri.");
+      return;
+    }
     await mutate(async () => {
       const { error } = await createClient().rpc("set_order_details", {
         p_order_id: order!.id,
@@ -716,6 +793,10 @@ export function TableOrder({
   }
 
   async function saveItemNote(item: OrderItem, notes: string) {
+    if (notes.length > 300) {
+      setMutationError("La nota riga non può superare 300 caratteri.");
+      return;
+    }
     await mutate(async () => {
       const { error } = await createClient().rpc("set_order_item_notes", {
         p_item_id: item.id,

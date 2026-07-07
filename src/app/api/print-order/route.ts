@@ -13,10 +13,20 @@ import {
   getPrintNodeJobStates,
   PrintNodeSubmissionError,
 } from "@/lib/printnode";
-import { buildRaw80mmTicket, PRINT_JOB_LABELS } from "@/lib/print-ticket-raw";
+import {
+  buildRaw80mmDepartmentTicket,
+  buildRaw80mmTicket,
+  PRINT_JOB_LABELS,
+} from "@/lib/print-ticket-raw";
 import { createClient } from "@/lib/supabase/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Order, PrintJob, PrintJobType, Profile } from "@/types/domain";
+import type {
+  Order,
+  OrderTicketPrintMode,
+  PrintJob,
+  PrintJobType,
+  Profile,
+} from "@/types/domain";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -78,15 +88,11 @@ export async function GET() {
   let reconciled = 0;
 
   if (availability.configured) {
-    const { data: unresolvedJobs } = await supabase
-      .from("print_jobs")
-      .select("*")
-      .eq("status", "printing")
-      .not("printnode_job_id", "is", null);
+    const unresolvedJobs = await loadAllUnresolvedPrintJobs(supabase);
 
     reconciled = await reconcilePrintJobs(
       supabase,
-      (unresolvedJobs ?? []) as PrintJob[],
+      unresolvedJobs,
     );
   }
 
@@ -104,6 +110,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const requestStartedAt = Date.now();
   const profile = await requireActiveProfile();
   if (!profile) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 401 });
@@ -158,7 +165,10 @@ export async function POST(request: Request) {
     print_job_id: job.id,
     idempotency_key: job.idempotency_key,
     attempt_number: job.attempt_number ?? job.retry_count + 1,
+    attempt: job.attempt_number ?? job.retry_count + 1,
     printnode_job_id: job.printnode_job_id,
+    request_started_at_ms: requestStartedAt,
+    copies: job.copies,
   };
 
   if (job.printnode_job_id) {
@@ -286,14 +296,25 @@ export async function POST(request: Request) {
 
     const order = await loadOrderForPrint(supabase, input.orderId);
     if (!order) throw new Error("Ordine non disponibile");
+    if (job.copies !== 3) {
+      throw new Error(
+        `Metadati copie non validi per la comanda: attese 3, trovate ${job.copies}`,
+      );
+    }
 
     const ticketType = await resolveTicketType(supabase, job, input.type);
+    const printMode = await loadOrderTicketPrintMode(supabase);
+    const content =
+      printMode === "department_split"
+        ? buildRaw80mmDepartmentTicket(order, ticketType)
+        : buildRaw80mmTicket(order, ticketType);
+    const printNodeCopies = printMode === "department_split" ? 1 : job.copies;
     const source = printNodeSource(job.id);
     const submission = await createPrintNodeJob({
       title: `${PRINT_JOB_LABELS[ticketType]} #${order.order_number}`,
-      content: buildRaw80mmTicket(order, ticketType),
+      content,
       idempotencyKey: job.idempotency_key,
-      copies: 3,
+      copies: printNodeCopies,
       source,
       createdAfter: job.processing_started_at ?? job.created_at,
     });
@@ -302,6 +323,8 @@ export async function POST(request: Request) {
       ...context,
       printnode_job_id: submission.id,
       recovered_from_printnode: submission.recovered,
+      ticket_print_mode: printMode,
+      printnode_copies: printNodeCopies,
       sent_at: new Date().toISOString(),
     });
 
@@ -584,6 +607,30 @@ async function reconcilePrintJobs(supabase: SupabaseClient, jobs: PrintJob[]) {
   }
 }
 
+async function loadAllUnresolvedPrintJobs(supabase: SupabaseClient) {
+  const pageSize = 500;
+  const jobs: PrintJob[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from("print_jobs")
+      .select("*")
+      .eq("status", "printing")
+      .not("printnode_job_id", "is", null)
+      .order("created_at")
+      .range(offset, offset + pageSize - 1);
+    if (error) {
+      logPrintEvent("print_queue_database_read_failed", {
+        offset,
+        error: error.message,
+      });
+      return jobs;
+    }
+    const page = (data ?? []) as PrintJob[];
+    jobs.push(...page);
+    if (page.length < pageSize) return jobs;
+  }
+}
+
 async function recoverSubmissionBySource(supabase: SupabaseClient, job: PrintJob) {
   const recovered = await findPrintNodeJobBySource(
     printNodeSource(job.id),
@@ -668,6 +715,19 @@ async function loadPrintJob(supabase: SupabaseClient, jobId: string) {
   return data as PrintJob | null;
 }
 
+async function loadOrderTicketPrintMode(
+  supabase: SupabaseClient,
+): Promise<OrderTicketPrintMode> {
+  const { data, error } = await supabase
+    .from("restaurant_settings")
+    .select("order_ticket_print_mode")
+    .single();
+  if (error) return "legacy_three_copies";
+  return data?.order_ticket_print_mode === "legacy_three_copies"
+    ? "legacy_three_copies"
+    : "department_split";
+}
+
 async function getOrderForAutomaticPrint(supabase: SupabaseClient, orderId: string) {
   const { data } = await supabase
     .from("orders")
@@ -682,12 +742,19 @@ function printNodeSource(jobId: string) {
 }
 
 function logPrintEvent(event: string, details: Record<string, unknown>) {
+  const startedAt =
+    typeof details.request_started_at_ms === "number"
+      ? details.request_started_at_ms
+      : null;
+  const safeDetails = { ...details };
+  delete safeDetails.request_started_at_ms;
   console.info(
     JSON.stringify({
       scope: "order_printing",
       event,
       timestamp: new Date().toISOString(),
-      ...details,
+      ...(startedAt === null ? {} : { duration_ms: Date.now() - startedAt }),
+      ...safeDetails,
     }),
   );
 }

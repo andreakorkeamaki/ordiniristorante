@@ -10,7 +10,7 @@ Web app mobile-first per menu QR, comande staff, cassa e amministrazione. Next.j
 - `/staff/table/[id]`: comanda granulare, coperti, note, extra, Presence e invio alla cassa.
 - `/staff/order/[id]`: comanda asporto con nome cliente e ora di ritiro.
 - `/cassa`: coda realtime, preview ticket 80 mm, stampa browser e chiusura ordine.
-- `/admin`: menu, disponibilità, extra, tavoli e impostazioni di stampa.
+- `/admin`: menu, disponibilità, extra, tavoli e impostazioni del locale.
 
 Supabase è l’unica fonte di verità. Il browser non salva menu o comande in `localStorage`.
 
@@ -155,13 +155,15 @@ Il recupero password parte da `/staff/forgot-password` e termina su `/staff/rese
 
 `POST /api/print-order` legge ordine e righe sul server, genera un ticket RAW
 ESC/POS da 80 mm e lo invia a PrintNode. L’API key e l’id stampante non vengono
-mai inviati al browser. Il valore `qty` viene salvato nel print job usando le
-impostazioni admin separate per tavoli e asporti (da una a tre copie).
+mai inviati al browser. Ogni comanda, aggiornamento, annullamento o ristampa usa
+sempre `copies = 3` sia nel database sia nel payload PrintNode. Lo scontrino usa
+sempre `copies = 1`; questi valori sono vincoli database e non impostazioni UI.
 
 La cassa offre:
 
 - stato PrintNode, stampante e computer Dell;
-- lista job pending, printing e failed;
+- lista completa dei job operativi pending, printing e failed, senza limite
+  globale; lo storico è caricato separatamente;
 - preview da 80 mm con il numero di copie salvato nel job;
 - ticket distinti per nuovo ordine, aggiornamento, annullamento e ristampa;
 - etichetta `RISTAMPA` sulle ristampe;
@@ -172,12 +174,24 @@ La cassa offre:
 
 Il client PrintNode deve essere installato e connesso sul Dell e la stampante
 termica deve accettare job RAW ESC/POS. Se PrintNode, Dell o stampante non sono
-disponibili, il job passa a `failed` e resta stampabile manualmente dalla cassa.
+disponibili, il job resta operativo e stampabile manualmente dalla cassa.
 Se PrintNode accetta il job ma il database o la rete non confermano
 l’aggiornamento, il job resta `printing` e passa a `Da verificare`: non viene
 ristampato automaticamente. Lo stato `done` di PrintNode significa che il job è
 stato consegnato alla coda del sistema operativo, non che il foglio sia
 fisicamente uscito; per questo la cassa mantiene sempre la conferma manuale.
+
+`POST /api/close-table` crea prima un job `receipt` persistente e solo dopo tenta
+la stampa. Il job usa claim atomico, chiave idempotente stabile, recupero tramite
+`source`, riconciliazione PrintNode e retry collegati. Il tavolo rimane aperto
+finché lo scontrino non è `printed`; il fallback browser richiede una conferma
+manuale auditata che conferma lo scontrino e chiude l’ordine nella stessa
+transazione.
+
+La chiusura servizio prova prima la modalità sicura. Ordini aperti e job
+operativi vengono conteggiati; job `printing` o `uncertain` bloccano anche la
+modalità forzata. La forzatura richiede conferma rafforzata e motivazione
+persistita, e non annulla localmente job che PrintNode potrebbe avere accettato.
 
 ## Verifiche
 

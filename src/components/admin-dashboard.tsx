@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useConnection } from "@/components/connection-provider";
 import { formatCurrency } from "@/lib/format";
+import { readFailureState } from "@/lib/reliable-data-state";
 import {
   reorderCategoryMenuItems,
   type DropPlacement,
@@ -12,6 +13,7 @@ import type {
   MenuCategory,
   MenuExtra,
   MenuItem,
+  OrderTicketPrintMode,
   PreparationArea,
   RestaurantSettings,
   RestaurantTable,
@@ -25,13 +27,19 @@ type ProductDropTarget = {
 };
 
 export function AdminDashboard() {
-  const { canWrite, blockReason, markUnreliable } = useConnection();
+  const {
+    canWrite: connectionCanWrite,
+    blockReason,
+    markUnreliable,
+  } = useConnection();
   const [tab, setTab] = useState<Tab>("menu");
   const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [items, setItems] = useState<MenuItem[]>([]);
   const [extras, setExtras] = useState<MenuExtra[]>([]);
   const [tables, setTables] = useState<RestaurantTable[]>([]);
   const [settings, setSettings] = useState<RestaurantSettings | null>(null);
+  const [printModePreview, setPrintModePreview] =
+    useState<OrderTicketPrintMode>("department_split");
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -42,8 +50,16 @@ export function AdminDashboard() {
   const [productDropTarget, setProductDropTarget] =
     useState<ProductDropTarget | null>(null);
   const feedbackTimer = useRef<number | null>(null);
+  const loadGeneration = useRef(0);
+  const hasSnapshot = useRef(false);
+  const [dataState, setDataState] = useState<"loading" | "ready" | "stale" | "error">(
+    "loading",
+  );
+  const [loadError, setLoadError] = useState("");
+  const canWrite = connectionCanWrite && dataState === "ready";
 
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     const supabase = createClient();
     const [categoryResult, itemResult, extraResult, tableResult, settingsResult] = await Promise.all([
       supabase.from("menu_categories").select("*").order("sort_order").order("name"),
@@ -55,7 +71,7 @@ export function AdminDashboard() {
         .order("name"),
       supabase.from("menu_extras").select("*").order("sort_order"),
       supabase.from("restaurant_tables").select("*").order("table_number"),
-      supabase.from("restaurant_settings").select("*").limit(1).maybeSingle(),
+      supabase.from("restaurant_settings").select("*").single(),
     ]);
     const error =
       categoryResult.error ??
@@ -65,14 +81,25 @@ export function AdminDashboard() {
       settingsResult.error;
     if (error) {
       if (!error.code) markUnreliable();
+      if (generation !== loadGeneration.current) return;
+      setLoadError("Configurazione non aggiornata. Le modifiche restano bloccate.");
+      setDataState(readFailureState(hasSnapshot.current));
       setLoading(false);
       return;
     }
+    if (generation !== loadGeneration.current) return;
     setCategories((categoryResult.data ?? []) as MenuCategory[]);
     setItems((itemResult.data ?? []) as MenuItem[]);
     setExtras((extraResult.data ?? []) as MenuExtra[]);
     setTables((tableResult.data ?? []) as RestaurantTable[]);
-    setSettings(settingsResult.data as RestaurantSettings | null);
+    const loadedSettings = settingsResult.data as RestaurantSettings | null;
+    setSettings(loadedSettings);
+    setPrintModePreview(
+      loadedSettings?.order_ticket_print_mode ?? "department_split",
+    );
+    hasSnapshot.current = true;
+    setLoadError("");
+    setDataState("ready");
     setLoading(false);
   }, [markUnreliable]);
 
@@ -90,13 +117,23 @@ export function AdminDashboard() {
     };
   }, [feedback]);
 
-  if (loading) return <div className="loader" aria-label="Caricamento amministrazione" />;
+  if (loading && dataState === "loading") {
+    return <div className="loader" aria-label="Caricamento amministrazione" />;
+  }
 
   return (
     <>
       <section className="workspace-heading">
         <div><p className="eyebrow">Configurazione</p><h1>Amministrazione</h1><p>Le modifiche al menu vengono pubblicate in tempo reale.</p></div>
       </section>
+      {dataState !== "ready" && (
+        <section className="connection-action-hint" role="alert">
+          <strong>Dati amministrativi non affidabili.</strong> {loadError}
+          <button className="text-button" onClick={() => void load()}>
+            Riprova
+          </button>
+        </section>
+      )}
       {feedback && (
         <button
           className={`admin-toast ${feedback.type === "error" ? "is-error" : ""}`}
@@ -128,7 +165,7 @@ export function AdminDashboard() {
           <section className="admin-panel">
             <div className="panel-title"><div><p className="eyebrow">Struttura</p><h2>Categorie</h2></div></div>
             <form className="inline-create" onSubmit={createCategory}>
-              <input name="name" placeholder="Nuova categoria" required />
+              <input name="name" placeholder="Nuova categoria" maxLength={120} required />
               <input name="slug" placeholder="slug" required />
               <button className="button button-primary">{saving ? "Salvataggio…" : "Aggiungi"}</button>
             </form>
@@ -155,7 +192,7 @@ export function AdminDashboard() {
                 <option value="">Categoria</option>
                 {categories.filter((category) => category.slug !== "extra").map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}
               </select>
-              <input name="name" placeholder="Nome prodotto" required />
+              <input name="name" placeholder="Nome prodotto" maxLength={120} required />
               <input name="price" type="number" min="0" step="0.01" placeholder="Prezzo" required />
               <select name="preparation_area" defaultValue="cucina">
                 <option value="pizzeria">Pizzeria</option><option value="cucina">Cucina</option>
@@ -205,9 +242,9 @@ export function AdminDashboard() {
                       >
                         ⠿
                       </button>
-                      <input name="name" defaultValue={item.name} aria-label="Nome" />
+                      <input name="name" defaultValue={item.name} maxLength={120} aria-label="Nome" />
                       <input name="price" type="number" min="0" step="0.01" defaultValue={item.price} aria-label="Prezzo" />
-                      <input name="ingredients" defaultValue={item.ingredients ?? ""} placeholder="Ingredienti" aria-label="Ingredienti" />
+                      <input name="ingredients" defaultValue={item.ingredients ?? ""} maxLength={500} placeholder="Ingredienti" aria-label="Ingredienti" />
                       <select name="preparation_area" defaultValue={item.preparation_area} aria-label="Reparto">
                         <option value="pizzeria">Pizzeria</option><option value="cucina">Cucina</option>
                         <option value="bar">Bar</option><option value="cassa">Cassa</option>
@@ -260,7 +297,7 @@ export function AdminDashboard() {
         <section className="admin-panel">
           <div className="panel-title"><div><p className="eyebrow">Aggiunte</p><h2>Extra</h2></div></div>
           <form className="inline-create" onSubmit={createExtra}>
-            <input name="name" placeholder="Nome extra" required />
+            <input name="name" placeholder="Nome extra" maxLength={120} required />
             <input name="price" type="number" min="0" step="0.01" placeholder="Prezzo" required />
             <button className="button button-primary">{saving ? "Salvataggio…" : "Aggiungi"}</button>
           </form>
@@ -304,11 +341,41 @@ export function AdminDashboard() {
           <label>Nome locale<input name="restaurant_name" defaultValue={settings.restaurant_name} required /></label>
           <label>Coperto<input name="cover_charge" type="number" min="0" step="0.01" defaultValue={settings.cover_charge} required /></label>
           <div className="department-print-setting">
-            <strong>Comande per reparto</strong>
-            <p>
-              La stampa genera automaticamente un foglio separato per ogni reparto
-              coinvolto nell’ordine.
-            </p>
+            <div>
+              <strong>Tipo comande</strong>
+              <p>Decide cosa esce quando viene stampata una comanda operativa.</p>
+            </div>
+            <div className="print-mode-options">
+              {([
+                [
+                  "department_split",
+                  "Tre copie diverse",
+                  "Pizzeria, cucina e completa/cassa nello stesso invio.",
+                ],
+                [
+                  "legacy_three_copies",
+                  "Tre copie identiche",
+                  "Mantiene la stampa precedente con lo stesso foglio ripetuto.",
+                ],
+              ] as [OrderTicketPrintMode, string, string][]).map(
+                ([value, label, description]) => (
+                  <label className="print-mode-option" key={value}>
+                    <input
+                      checked={printModePreview === value}
+                      name="order_ticket_print_mode"
+                      onChange={() => setPrintModePreview(value)}
+                      type="radio"
+                      value={value}
+                    />
+                    <span>
+                      <strong>{label}</strong>
+                      <small>{description}</small>
+                    </span>
+                  </label>
+                ),
+              )}
+            </div>
+            <PrintModePreview mode={printModePreview} />
           </div>
           <label>Avviso allergeni<textarea name="allergen_notice" defaultValue={settings.allergen_notice ?? ""} /></label>
           <label>Testo finale ticket<textarea name="ticket_footer" defaultValue={settings.ticket_footer ?? ""} /></label>
@@ -428,6 +495,9 @@ export function AdminDashboard() {
       cover_charge: Number(data.get("cover_charge")),
       allergen_notice: String(data.get("allergen_notice")) || null,
       ticket_footer: String(data.get("ticket_footer")) || null,
+      order_ticket_print_mode: normalizePrintMode(
+        data.get("order_ticket_print_mode"),
+      ),
     }).eq("id", settings!.id));
   }
 
@@ -442,20 +512,20 @@ export function AdminDashboard() {
     const currentIndex = categories.findIndex((entry) => entry.id === category.id);
     const other = categories[currentIndex + delta];
     if (!other) return;
-    const supabase = createClient();
-    const first = await supabase.from("menu_categories").update({ sort_order: other.sort_order }).eq("id", category.id);
-    if (first.error) {
-      if (!first.error.code) markUnreliable();
-      setFeedback({ text: first.error.message, type: "error" });
-      return;
-    }
-    const second = await supabase.from("menu_categories").update({ sort_order: category.sort_order }).eq("id", other.id);
-    if (second.error && !second.error.code) markUnreliable();
-    setFeedback({
-      text: second.error ? second.error.message : "Salvato",
-      type: second.error ? "error" : "success",
+    const reordered = [...categories];
+    [reordered[currentIndex], reordered[currentIndex + delta]] = [
+      reordered[currentIndex + delta],
+      reordered[currentIndex],
+    ];
+    const { error } = await createClient().rpc("reorder_menu_categories", {
+      p_category_ids: reordered.map((entry) => entry.id),
     });
-    if (!second.error) await load();
+    if (error && !error.code) markUnreliable();
+    setFeedback({
+      text: error ? error.message : "Salvato",
+      type: error ? "error" : "success",
+    });
+    if (!error) await load();
   }
 
   function handleProductDragOver(
@@ -549,6 +619,78 @@ export function AdminDashboard() {
   async function toggle(table: string, id: string, field: string, value: boolean) {
     await execute(() => createClient().from(table).update({ [field]: value }).eq("id", id));
   }
+}
+
+function normalizePrintMode(value: FormDataEntryValue | null): OrderTicketPrintMode {
+  return value === "legacy_three_copies"
+    ? "legacy_three_copies"
+    : "department_split";
+}
+
+function PrintModePreview({ mode }: { mode: OrderTicketPrintMode }) {
+  if (mode === "legacy_three_copies") {
+    return (
+      <div className="settings-ticket-preview">
+        {["COPIA 1", "COPIA 2", "COPIA 3"].map((copy) => (
+          <pre key={copy}>{`${copy}
+NUOVA COMANDA
+COMANDA #42
+TAVOLO 12
+
+PINSE ROSSE
+1x R Diavola
+  + mozzarella
+  Nota: senza piccante
+
+ANTIPASTI E FRITTI
+1 Suppli
+
+Tavolo: 12
+Orario ordine: 21:35`}</pre>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-ticket-preview">
+      <pre>{`COPIA PIZZERIA
+NUOVA COMANDA
+COMANDA #42
+
+1R Diavola
+  + mozzarella
+  Nota: senza piccante
+1B Boscaiola
+
+Tavolo: 12
+Orario ordine: 21:35`}</pre>
+      <pre>{`COPIA CUCINA
+NUOVA COMANDA
+COMANDA #42
+
+1 Suppli
+1 Carbonara
+1 Contorno verdure
+
+Tavolo: 12
+Orario ordine: 21:35`}</pre>
+      <pre>{`COPIA COMPLETA / CASSA
+NUOVA COMANDA
+COMANDA #42
+
+Diavola
+1 x 9,00 EUR  9,00 EUR
+Suppli
+1 x 3,00 EUR  3,00 EUR
+Acqua
+1 x 2,00 EUR  2,00 EUR
+
+TOTALE 14,00 EUR
+Tavolo: 12
+Orario ordine: 21:35`}</pre>
+    </div>
+  );
 }
 
 function replaceCategoryItems(

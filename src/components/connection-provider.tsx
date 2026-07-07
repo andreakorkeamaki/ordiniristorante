@@ -14,7 +14,8 @@ type ConnectionStatus =
   | "checking"
   | "online"
   | "offline"
-  | "backend-unreachable";
+  | "backend-unreachable"
+  | "supabase-unreachable";
 
 interface ConnectionContextValue {
   status: ConnectionStatus;
@@ -26,10 +27,12 @@ interface ConnectionContextValue {
 
 const ConnectionContext = createContext<ConnectionContextValue | null>(null);
 
-function isOperationalPath(pathname: string) {
+export function isOperationalPath(pathname: string) {
   return (
     pathname === "/staff/tables" ||
     pathname.startsWith("/staff/table/") ||
+    pathname.startsWith("/staff/order/") ||
+    pathname === "/asporti" ||
     pathname === "/cassa" ||
     pathname === "/admin"
   );
@@ -44,6 +47,9 @@ function getBlockReason(status: ConnectionStatus) {
   }
   if (status === "backend-unreachable") {
     return "Connessione non affidabile. Il server non è raggiungibile e le modifiche sono bloccate.";
+  }
+  if (status === "supabase-unreachable") {
+    return "Il server dati Supabase non è raggiungibile. I dati visibili potrebbero non essere aggiornati.";
   }
   return null;
 }
@@ -70,7 +76,13 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
         cache: "no-store",
         signal: AbortSignal.timeout(5_000),
       });
-      if (!response.ok) throw new Error("Backend non raggiungibile");
+      if (!response.ok) {
+        if (response.status === 503) {
+          setStatus("supabase-unreachable");
+          return false;
+        }
+        throw new Error("Backend non raggiungibile");
+      }
       setStatus("online");
       return true;
     } catch {

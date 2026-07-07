@@ -22,10 +22,21 @@ export function ServiceControl({
   activeOrderCount: number;
   onChanged: () => Promise<void>;
 }) {
-  const { canWrite, blockReason, markUnreliable } = useConnection();
+  const {
+    canWrite: connectionCanWrite,
+    blockReason,
+    markUnreliable,
+  } = useConnection();
+  const canWrite = connectionCanWrite && !serviceError;
   const [busy, setBusy] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [message, setMessage] = useState("");
+  const [blockers, setBlockers] = useState<{
+    orders: Record<string, number>;
+    jobs: Record<string, number>;
+  } | null>(null);
+  const [forceReason, setForceReason] = useState("");
+  const [forceAccepted, setForceAccepted] = useState(false);
 
   if (serviceLoading) {
     return (
@@ -74,7 +85,13 @@ export function ServiceControl({
               className="button button-danger"
               disabled={!canWrite || busy}
               title={!canWrite ? blockReason ?? undefined : undefined}
-              onClick={() => setConfirmClose(true)}
+              onClick={() => {
+                setConfirmClose(true);
+                setBlockers(null);
+                setForceReason("");
+                setForceAccepted(false);
+                void loadBlockers();
+              }}
             >
               Chiudi servizio
             </button>
@@ -105,11 +122,39 @@ export function ServiceControl({
             <p className="eyebrow">Fine servizio</p>
             <h2>Chiudere {formatServiceLabel(service)}?</h2>
             <p>
-              Verranno liberati <strong>{activeOrderCount} tavoli</strong>. Le
-              comande inviate resteranno nello storico; le bozze non inviate saranno
-              annullate.
+              La chiusura sicura verifica prima ordini e job di stampa. Nessun
+              ordine aperto verrà chiuso automaticamente.
             </p>
-            <p>Questa operazione non cancella ordini o incassi.</p>
+            {blockers && (
+              <div className="service-blockers" role="status">
+                <strong>Blocchi attuali</strong>
+                <p>
+                  Ordini: {formatCounts(blockers.orders)} · Job:{" "}
+                  {formatCounts(blockers.jobs)}
+                </p>
+              </div>
+            )}
+            {blockers && countValues(blockers.orders) > 0 && (
+              <>
+                <label className="retry-reason">
+                  Motivazione della chiusura forzata
+                  <textarea
+                    value={forceReason}
+                    maxLength={500}
+                    onChange={(event) => setForceReason(event.target.value)}
+                  />
+                </label>
+                <label className="risk-confirmation">
+                  <input
+                    type="checkbox"
+                    checked={forceAccepted}
+                    onChange={(event) => setForceAccepted(event.target.checked)}
+                  />
+                  Confermo che gli ordini aperti verranno chiusi o annullati e
+                  che la motivazione resterà auditata.
+                </label>
+              </>
+            )}
             <div className="modal-actions">
               <button
                 className="button button-secondary"
@@ -121,10 +166,26 @@ export function ServiceControl({
               <button
                 className="button button-danger"
                 disabled={!canWrite || busy}
-                onClick={() => void close()}
+                onClick={() => void close(false)}
               >
-                {busy ? "Chiusura…" : "Chiudi servizio e libera i tavoli"}
+                {busy ? "Verifica…" : "Esegui chiusura sicura"}
               </button>
+              {blockers &&
+                countValues(blockers.orders) > 0 &&
+                countUnsafeJobs(blockers.jobs) === 0 && (
+                  <button
+                    className="button button-danger"
+                    disabled={
+                      !canWrite ||
+                      busy ||
+                      !forceAccepted ||
+                      forceReason.trim().length < 10
+                    }
+                    onClick={() => void close(true)}
+                  >
+                    Forza chiusura con motivazione
+                  </button>
+                )}
             </div>
           </section>
         </div>
@@ -148,21 +209,57 @@ export function ServiceControl({
     setBusy(false);
   }
 
-  async function close() {
+  async function loadBlockers() {
+    if (!service) return;
+    const { data, error } = await createClient().rpc(
+      "get_service_close_blockers",
+      { p_service_id: service.id },
+    );
+    if (error) {
+      if (!error.code) markUnreliable();
+      setMessage(error.message);
+      return;
+    }
+    setBlockers(
+      (data as {
+        orders: Record<string, number>;
+        jobs: Record<string, number>;
+      }) ?? { orders: {}, jobs: {} },
+    );
+  }
+
+  async function close(force: boolean) {
     if (!service || !canWrite || busy) return;
     setBusy(true);
     setMessage("");
     const { error } = await createClient().rpc("close_service", {
       p_service_id: service.id,
-      p_force: true,
+      p_force: force,
+      p_reason: force ? forceReason.trim() : null,
     });
     if (error) {
       if (!error.code) markUnreliable();
       setMessage(error.message);
+      await loadBlockers();
     } else {
       setConfirmClose(false);
       await onChanged();
     }
     setBusy(false);
   }
+}
+
+function countValues(counts: Record<string, number>) {
+  return Object.values(counts).reduce((total, count) => total + count, 0);
+}
+
+function countUnsafeJobs(counts: Record<string, number>) {
+  return (counts.printing ?? 0) + (counts.uncertain ?? 0);
+}
+
+function formatCounts(counts: Record<string, number>) {
+  const entries = Object.entries(counts).filter(([, count]) => count > 0);
+  return entries.length
+    ? entries.map(([status, count]) => `${status} ${count}`).join(", ")
+    : "nessuno";
 }

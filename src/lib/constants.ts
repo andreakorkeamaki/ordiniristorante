@@ -3,7 +3,8 @@ export const DEFAULT_SETTINGS = {
   restaurant_name: "La Sagretta",
   cover_charge: 1.9,
   dine_in_print_copies: 3,
-  takeaway_print_copies: 1,
+  takeaway_print_copies: 3,
+  order_ticket_print_mode: "department_split",
   allergen_notice:
     "Per allergie o intolleranze chiedi informazioni al personale prima di ordinare.",
   allergen_notice_en:

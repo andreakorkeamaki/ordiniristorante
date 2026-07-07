@@ -24,7 +24,7 @@ export function PublicMenu() {
   const load = useCallback(async () => {
     const supabase = createClient();
     const [settings, categories, items, extras] = await Promise.all([
-      supabase.from("restaurant_settings").select("*").limit(1).maybeSingle(),
+      supabase.from("restaurant_settings").select("*").single(),
       supabase
         .from("menu_categories")
         .select("*")

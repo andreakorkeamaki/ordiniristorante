@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildRaw80mmDepartmentTicket,
   buildRaw80mmTicket,
   getPinsaPrintPrefix,
 } from "@/lib/print-ticket-raw";
@@ -204,5 +205,72 @@ describe("buildRaw80mmTicket", () => {
     expect(body).toContain("NOTA: Senza salumi");
     expect(body).toContain("Pinsa Margherita");
     expect(body).toContain("Acqua");
+  });
+
+  it("produce tre copie operative diverse quando la modalità è per reparto", () => {
+    const multiDepartmentOrder: Order = {
+      ...order,
+      items: [
+        {
+          ...order.items![0],
+          quantity: 1,
+          line_total: 10,
+          category_name: "Pinse rosse",
+          category_sort_order: 2,
+        },
+        {
+          ...order.items![0],
+          id: "item-2",
+          menu_item_id: "suppli",
+          item_name_snapshot: "Suppli",
+          item_price_snapshot: 3,
+          quantity: 1,
+          line_total: 3,
+          preparation_area_snapshot: "cucina",
+          category_name: "Antipasti e fritti",
+          category_slug: "antipasti",
+          category_sort_order: 0,
+          notes: "Senza sale",
+          extras: [],
+        },
+        {
+          ...order.items![0],
+          id: "item-3",
+          menu_item_id: "acqua",
+          item_name_snapshot: "Acqua",
+          item_price_snapshot: 2,
+          quantity: 1,
+          line_total: 2,
+          preparation_area_snapshot: "bar",
+          category_name: "Bevande",
+          category_slug: "bevande",
+          category_sort_order: 8,
+          notes: "",
+          extras: [],
+        },
+      ],
+      subtotal: 15,
+      total: 18.8,
+    };
+
+    const body = buildRaw80mmDepartmentTicket(multiDepartmentOrder, "new_order")
+      .toString("ascii");
+    const copies = body.split("\u001dVA\u0010").filter(Boolean);
+
+    expect(copies).toHaveLength(3);
+    expect(copies[0]).toContain("COPIA PIZZERIA");
+    expect(copies[0]).toContain("1R Pinsa Margherita");
+    expect(copies[0]).not.toContain("Suppli");
+    expect(copies[1]).toContain("COPIA CUCINA");
+    expect(copies[1]).toContain("1 Suppli");
+    expect(copies[1]).not.toContain("Pinsa Margherita");
+    expect(copies[1]).not.toContain("Acqua");
+    expect(copies[2]).toContain("COPIA COMPLETA / CASSA");
+    expect(copies[2]).toContain("Pinsa Margherita");
+    expect(copies[2]).toContain("Suppli");
+    expect(copies[2]).toContain("Acqua");
+    expect(copies[2]).toContain("TOTALE 18,80 EUR");
+    expect(body).toContain("Tavolo: 7");
+    expect(body).toContain("Orario ordine: 14:00");
   });
 });
