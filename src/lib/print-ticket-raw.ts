@@ -1,9 +1,6 @@
 import type { Order, OrderItem, PrintJobType } from "@/types/domain";
 import { getOrderLocationLabel } from "@/lib/order-display";
-import {
-  aggregateIdenticalOrderItems,
-  groupOrderItemsByCategory,
-} from "@/lib/order-items";
+import { groupOrderItemsByCategory } from "@/lib/order-items";
 
 export const PRINT_JOB_LABELS: Record<PrintJobType, string> = {
   new_order: "NUOVA COMANDA",
@@ -15,7 +12,6 @@ export const PRINT_JOB_LABELS: Record<PrintJobType, string> = {
 
 const LINE_WIDTH = 24;
 const DOUBLE_TEXT_SIZE = Buffer.from([0x1d, 0x21, 0x11]);
-const NORMAL_TEXT_SIZE = Buffer.from([0x1d, 0x21, 0x00]);
 const CUT = Buffer.from([0x1d, 0x56, 0x41, 0x10]);
 const PIZZA_CATEGORY_SLUGS = new Set(["rosse", "bianche", "speciali"]);
 
@@ -51,17 +47,6 @@ function wrap(value: string, width = LINE_WIDTH) {
 
 function text(value: string) {
   return Buffer.from(`${ascii(value)}\n`, "ascii");
-}
-
-function money(value: number) {
-  return `${Number(value).toFixed(2).replace(".", ",")} EUR`;
-}
-
-function row(left: string, right: string) {
-  const safeLeft = ascii(left);
-  const safeRight = ascii(right);
-  const available = Math.max(1, LINE_WIDTH - safeRight.length - 1);
-  return `${safeLeft.slice(0, available).padEnd(available)} ${safeRight}`;
 }
 
 export function getPinsaPrintPrefix(categorySlug: string | null | undefined) {
@@ -166,56 +151,6 @@ function addPreparationLines(chunks: Buffer[], items: OrderItem[]) {
   }
 }
 
-function addCompleteLines(chunks: Buffer[], order: Order) {
-  const items = aggregateIdenticalOrderItems(order.items ?? []);
-  if (!items.length) {
-    chunks.push(text("NESSUN PRODOTTO"));
-    return;
-  }
-
-  for (const item of items) {
-    for (const line of wrap(item.item_name_snapshot)) chunks.push(text(line));
-    chunks.push(
-      text(row(
-        `${item.quantity} x ${money(item.item_price_snapshot)}`,
-        money(item.line_total),
-      )),
-    );
-
-    for (const extra of item.extras ?? []) {
-      for (const line of wrap(`+ ${extra.extra_name_snapshot}`)) {
-        chunks.push(text(line));
-      }
-      chunks.push(
-        text(row(
-          `${extra.quantity} x ${money(extra.extra_price_snapshot)}`,
-          money(extra.total),
-        )),
-      );
-    }
-    if (item.notes) {
-      for (const line of wrap(`Nota: ${item.notes}`)) chunks.push(text(line));
-    }
-  }
-
-  chunks.push(
-    text("-".repeat(LINE_WIDTH)),
-    text(row("SUBTOTALE", money(order.subtotal))),
-    ...(order.order_type === "dine_in"
-      ? [text(row(
-          `COPERTO ${order.cover_count} x ${money(order.cover_price_snapshot)}`,
-          money(order.cover_total),
-        ))]
-      : []),
-    text("=".repeat(LINE_WIDTH)),
-    Buffer.from([0x1b, 0x61, 0x01]),
-    DOUBLE_TEXT_SIZE,
-    text(`TOTALE ${money(order.total)}`),
-    NORMAL_TEXT_SIZE,
-    Buffer.from([0x1b, 0x61, 0x00]),
-  );
-}
-
 function addGeneralNotes(chunks: Buffer[], order: Order) {
   if (!order.general_notes) return;
   chunks.push(
@@ -259,7 +194,7 @@ export function buildRaw80mmDepartmentTicket(order: Order, jobType: PrintJobType
       addPreparationLines(chunks, kitchenItems);
     }),
     buildDepartmentCopy(order, jobType, "COPIA COMPLETA / CASSA", (chunks) => {
-      addCompleteLines(chunks, order);
+      addPreparationLines(chunks, items);
     }),
   ]);
 }
