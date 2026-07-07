@@ -1065,6 +1065,36 @@ select is(
   'cancelling preserves the completed new-order print'
 );
 
+update public.print_jobs
+set status = 'printed',
+    printed_at = coalesce(printed_at, now())
+where order_id in (
+    select id
+    from public.orders
+    where service_id = (
+      select id from public.restaurant_services where closed_at is null
+    )
+  )
+  and status = 'printing';
+
+insert into public.print_jobs(
+  order_id,
+  job_type,
+  idempotency_key,
+  status,
+  copies,
+  labels,
+  created_by
+) values (
+  '00000000-0000-4000-9000-000000009922',
+  'reprint',
+  '00000000-0000-4000-9000-000000009922:reprint:service-close-blocker',
+  'printing',
+  3,
+  '["RISTAMPA"]'::jsonb,
+  '00000000-0000-4000-9000-000000009901'
+);
+
 select throws_ok(
   $$
     select public.close_service(
@@ -1084,7 +1114,7 @@ select lives_ok(
         select id
         from public.print_jobs
         where idempotency_key =
-          '00000000-0000-4000-9000-000000009921:reprint:00000000-0000-4000-9000-000000009941'
+          '00000000-0000-4000-9000-000000009922:reprint:service-close-blocker'
       )
     )
   $$,
