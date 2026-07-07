@@ -1,5 +1,5 @@
 begin;
-select plan(137);
+select plan(141);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -1222,6 +1222,65 @@ select is(
 );
 
 rollback to savepoint receipt_state_machine_tests;
+
+savepoint receipt_confirmed_printed_order_close_tests;
+
+update public.orders
+set status = 'confirmed'
+where id = '00000000-0000-4000-9000-000000009922';
+
+update public.print_jobs
+set status = 'printed',
+    printed_at = coalesce(printed_at, now())
+where order_id = '00000000-0000-4000-9000-000000009922'
+  and job_type = 'new_order';
+
+select lives_ok(
+  $$
+    select public.get_or_create_receipt_print_job(
+      '00000000-0000-4000-9000-000000009922'
+    )
+  $$,
+  'a confirmed order with printed command can prepare a receipt'
+);
+select is(
+  (
+    select public.claim_print_job((
+      select id
+      from public.print_jobs
+      where order_id = '00000000-0000-4000-9000-000000009922'
+        and job_type = 'receipt'
+    )) -> 'job' ->> 'status'
+  ),
+  'printing',
+  'a confirmed order with printed command can claim the receipt'
+);
+select lives_ok(
+  $$
+    select public.confirm_receipt_manual_and_close(
+      (
+        select id
+        from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009922'
+          and job_type = 'receipt'
+      ),
+      (select version from public.orders where id = '00000000-0000-4000-9000-000000009922'),
+      'Scontrino stampato manualmente da ordine confermato'
+    )
+  $$,
+  'manual receipt confirmation closes a confirmed order whose command was printed'
+);
+select is(
+  (
+    select status::text
+    from public.orders
+    where id = '00000000-0000-4000-9000-000000009922'
+  ),
+  'closed',
+  'confirmed printed order is closed by receipt confirmation'
+);
+
+rollback to savepoint receipt_confirmed_printed_order_close_tests;
 
 select throws_ok(
   $$

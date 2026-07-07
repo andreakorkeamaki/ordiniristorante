@@ -269,7 +269,11 @@ describe("buildRaw80mmTicket", () => {
     expect(copies[2]).toContain("Pinsa Margherita");
     expect(copies[2]).toContain("Suppli");
     expect(copies[2]).toContain("Acqua");
-    expect(copies[2]).toContain("TOTALE 18,80 EUR");
+    expect(copies[2]).not.toMatch(/PREZZ|SUBTOTALE|TOTALE|SCONTO|COPERTO|EUR|EURO/i);
+    expect(copies[2]).not.toContain("18,80");
+    expect(copies[2]).not.toContain("10,00");
+    expect(copies[2]).not.toContain("3,00");
+    expect(copies[2]).not.toContain("2,00");
     expect(body).toContain("Tavolo: 7");
     expect(body).toContain("Orario ordine: 14:00");
   });
