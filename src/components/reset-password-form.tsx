@@ -2,8 +2,16 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { hasSupabaseEnv } from "@/lib/supabase/config";
 
-type Status = "checking" | "ready" | "saving" | "saved" | "invalid" | "error";
+type Status =
+  | "checking"
+  | "ready"
+  | "saving"
+  | "saved"
+  | "invalid"
+  | "error"
+  | "misconfigured";
 
 export function ResetPasswordForm() {
   const [status, setStatus] = useState<Status>("checking");
@@ -12,27 +20,35 @@ export function ResetPasswordForm() {
     let active = true;
 
     async function initialize() {
-      const supabase = createClient();
-      const params = new URLSearchParams(window.location.hash.slice(1));
-      const accessToken = params.get("access_token");
-      const refreshToken = params.get("refresh_token");
-
-      if (accessToken && refreshToken) {
-        const { error } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        });
-        window.history.replaceState(null, "", window.location.pathname);
-        if (error) {
-          if (active) setStatus("invalid");
-          return;
-        }
+      if (!hasSupabaseEnv()) {
+        if (active) setStatus("misconfigured");
+        return;
       }
+      try {
+        const supabase = createClient();
+        const params = new URLSearchParams(window.location.hash.slice(1));
+        const accessToken = params.get("access_token");
+        const refreshToken = params.get("refresh_token");
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (active) setStatus(user ? "ready" : "invalid");
+        if (accessToken && refreshToken) {
+          const { error } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+          window.history.replaceState(null, "", window.location.pathname);
+          if (error) {
+            if (active) setStatus("invalid");
+            return;
+          }
+        }
+
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (active) setStatus(user ? "ready" : "invalid");
+      } catch {
+        if (active) setStatus("misconfigured");
+      }
     }
 
     void initialize();
@@ -54,16 +70,35 @@ export function ResetPasswordForm() {
     }
 
     setStatus("saving");
-    const supabase = createClient();
-    const { error } = await supabase.auth.updateUser({ password });
-    if (error) {
-      setStatus("error");
-      return;
-    }
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) {
+        setStatus("error");
+        return;
+      }
 
-    await supabase.auth.signOut();
-    form.reset();
-    setStatus("saved");
+      await supabase.auth.signOut();
+      form.reset();
+      setStatus("saved");
+    } catch {
+      setStatus("misconfigured");
+    }
+  }
+
+  if (status === "misconfigured") {
+    return (
+      <section className="login-card" role="alert">
+        <div>
+          <span className="eyebrow">Area riservata</span>
+          <h2>Servizio non configurato</h2>
+        </div>
+        <p className="form-error">
+          Il recupero password non è disponibile per un errore di configurazione
+          del deploy. Contatta il responsabile tecnico.
+        </p>
+      </section>
+    );
   }
 
   return (

@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConnection } from "@/components/connection-provider";
+import { PrintReceipt } from "@/components/print-receipt";
 import { PrintTicket } from "@/components/print-ticket";
 import { ServiceControl } from "@/components/service-control";
 import { formatCurrency, formatDateTime, formatTime } from "@/lib/format";
@@ -16,6 +17,7 @@ import {
   getPrintJobStatusLabel,
   getStaffPrintMessage,
 } from "@/lib/print-job-state";
+import { readFailureState } from "@/lib/reliable-data-state";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentService } from "@/hooks/use-current-service";
 import type {
@@ -28,11 +30,13 @@ import type {
 } from "@/types/domain";
 
 const ACTIVE = ["draft", "pending_cashier", "confirmed", "in_preparation", "bill_requested"];
+const HISTORY_PAGE_SIZE = 50;
 const JOB_LABELS: Record<PrintJobType, string> = {
   new_order: "NUOVA COMANDA",
   order_update: "AGGIORNAMENTO COMANDA",
   cancellation: "ANNULLAMENTO",
   reprint: "RISTAMPA",
+  receipt: "SCONTRINO",
 };
 
 interface PrinterStatus {
@@ -44,6 +48,14 @@ interface PrinterStatus {
     state: string;
     computer: { name: string; state: string };
   } | null;
+  reason?:
+    | "available"
+    | "not_configured"
+    | "api_unreachable"
+    | "timeout"
+    | "computer_disconnected"
+    | "printer_offline"
+    | "printer_not_found";
 }
 
 interface SelectedTicket {
@@ -68,11 +80,16 @@ type PrintConfirmation =
     };
 
 export function CashierDashboard() {
-  const { canWrite, blockReason, markUnreliable } = useConnection();
+  const {
+    canWrite: connectionCanWrite,
+    blockReason,
+    markUnreliable,
+  } = useConnection();
   const {
     service,
     loading: serviceLoading,
     error: serviceError,
+    state: serviceState,
     reload: reloadService,
   } = useCurrentService();
   const [orders, setOrders] = useState<Order[]>([]);
@@ -91,39 +108,69 @@ export function CashierDashboard() {
   const [riskAccepted, setRiskAccepted] = useState(false);
   const [busyJobId, setBusyJobId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [dataState, setDataState] = useState<"loading" | "ready" | "stale" | "error">(
+    "loading",
+  );
+  const [loadError, setLoadError] = useState("");
+  const [receiptTarget, setReceiptTarget] = useState<{
+    order: Order;
+    job: PrintJob;
+  } | null>(null);
+  const [receiptPrintedManually, setReceiptPrintedManually] = useState(false);
+  const [receiptRetryAccepted, setReceiptRetryAccepted] = useState(false);
+  const [historyCursor, setHistoryCursor] = useState<string | null>(null);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const loadGeneration = useRef(0);
+  const hasSnapshot = useRef(false);
+  const canWrite =
+    connectionCanWrite && dataState === "ready" && serviceState === "ready";
 
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     const supabase = createClient();
-    const [activeOrdersResult, tablesResult, profilesResult, jobsResult] = await Promise.all([
+    const [activeOrdersResult, tablesResult, profilesResult, operationalJobsResult, historyJobsResult] = await Promise.all([
       supabase.from("orders").select("*").in("status", ACTIVE).order("created_at"),
       supabase.from("restaurant_tables").select("*"),
       supabase.from("profiles").select("id, full_name, role, active"),
+      loadAllOperationalPrintJobs(supabase),
       supabase
         .from("print_jobs")
         .select("*")
+        .in("status", ["printed", "cancelled"])
         .order("created_at", { ascending: false })
-        .limit(200),
+        .limit(HISTORY_PAGE_SIZE),
     ]);
     const firstError =
       activeOrdersResult.error ??
       tablesResult.error ??
       profilesResult.error ??
-      jobsResult.error;
+      operationalJobsResult.error ??
+      historyJobsResult.error;
     if (firstError) {
       if (!firstError.code) markUnreliable();
+      if (generation !== loadGeneration.current) return;
+      setLoadError("Dati cassa non aggiornati. Riprova prima di eseguire operazioni.");
+      setDataState(readFailureState(hasSnapshot.current));
       setLoading(false);
       return;
     }
 
-    const rawJobs = (jobsResult.data ?? []) as PrintJob[];
+    const rawJobs = [
+      ...((operationalJobsResult.data ?? []) as PrintJob[]),
+      ...((historyJobsResult.data ?? []) as PrintJob[]),
+    ];
     const activeOrders = (activeOrdersResult.data ?? []) as Order[];
     const activeIds = new Set(activeOrders.map((order) => order.id));
     const missingIds = [...new Set(rawJobs.map((job) => job.order_id).filter((id) => !activeIds.has(id)))];
     const queuedOrdersResult = missingIds.length
-      ? await supabase.from("orders").select("*").in("id", missingIds)
+      ? await loadOrdersByIds(supabase, missingIds)
       : { data: [], error: null };
     if (queuedOrdersResult.error) {
       if (!queuedOrdersResult.error.code) markUnreliable();
+      if (generation !== loadGeneration.current) return;
+      setLoadError("Ordini collegati alla coda non disponibili.");
+      setDataState(readFailureState(hasSnapshot.current));
       setLoading(false);
       return;
     }
@@ -133,17 +180,17 @@ export function CashierDashboard() {
     ];
     const orderIds = rawOrders.map((order) => order.id);
     const linesResult = orderIds.length
-      ? await supabase
-          .from("order_items")
-          .select("*, extras:order_item_extras(*)")
-          .in("order_id", orderIds)
-          .order("created_at")
+      ? await loadOrderLinesByIds(supabase, orderIds)
       : { data: [], error: null };
     if (linesResult.error) {
       if (!linesResult.error.code) markUnreliable();
+      if (generation !== loadGeneration.current) return;
+      setLoadError("Righe ordine non aggiornate.");
+      setDataState(readFailureState(hasSnapshot.current));
       setLoading(false);
       return;
     }
+    if (generation !== loadGeneration.current) return;
     const tables = new Map(
       ((tablesResult.data ?? []) as RestaurantTable[]).map((table) => [table.id, table]),
     );
@@ -161,6 +208,12 @@ export function CashierDashboard() {
       })),
     );
     setJobs(rawJobs);
+    const historyPage = (historyJobsResult.data ?? []) as PrintJob[];
+    setHistoryCursor(historyPage.at(-1)?.created_at ?? null);
+    setHistoryHasMore(historyPage.length === HISTORY_PAGE_SIZE);
+    hasSnapshot.current = true;
+    setLoadError("");
+    setDataState("ready");
     setLoading(false);
   }, [markUnreliable]);
 
@@ -176,7 +229,11 @@ export function CashierDashboard() {
         configured: true,
         available: false,
         printer: null,
-        message: error instanceof Error ? error.message : "PrintNode non raggiungibile",
+        message:
+          error instanceof TypeError
+            ? "Server dell’app non raggiungibile"
+            : "Stato PrintNode non disponibile",
+        reason: "api_unreachable",
       });
     }
   }, [markUnreliable]);
@@ -246,16 +303,15 @@ export function CashierDashboard() {
       jobFor(order.id, "new_order")?.status === "printed",
   );
   const queuedJobs = jobs.filter((job) =>
-    ["pending", "printing", "failed"].includes(job.status) &&
-    isCurrentServiceJob(job, orderById, service?.id),
+    ["pending", "printing", "failed"].includes(job.status),
   );
-  const historicalFailures = jobs.filter(
-    (job) =>
-      job.status === "failed" &&
-      !isCurrentServiceJob(job, orderById, service?.id),
+  const historicalJobs = jobs.filter((job) =>
+    ["printed", "cancelled"].includes(job.status),
   );
 
-  if (loading) return <div className="loader" aria-label="Caricamento cassa" />;
+  if (loading && dataState === "loading") {
+    return <div className="loader" aria-label="Caricamento cassa" />;
+  }
 
   return (
     <>
@@ -298,6 +354,9 @@ export function CashierDashboard() {
         <div>
           <strong>{printer?.available ? "Stampante online" : "Stampa manuale disponibile"}</strong>
           <p>{printer?.message ?? "Verifica PrintNode in corso…"}</p>
+          {printer && !printer.available && (
+            <small>{printerAction(printer.reason)}</small>
+          )}
         </div>
         <button className="text-button" onClick={() => void refreshPrinter().then(load)}>
           Aggiorna
@@ -311,7 +370,15 @@ export function CashierDashboard() {
       )}
       {!canWrite && (
         <p className="connection-action-hint" role="status">
-          {blockReason} Le azioni di cassa e stampa restano disabilitate.
+          {dataState === "ready" && serviceState === "ready"
+            ? blockReason
+            : serviceError || loadError} Le azioni di cassa e
+          stampa restano disabilitate.
+          {dataState !== "ready" && (
+            <button className="text-button" onClick={() => void load()}>
+              Riprova
+            </button>
+          )}
         </p>
       )}
 
@@ -331,6 +398,7 @@ export function CashierDashboard() {
             const tableJobs = jobs.filter(
               (candidate) =>
                 candidate.order_id === job.order_id &&
+                candidate.job_type !== "receipt" &&
                 ["printing", "failed"].includes(candidate.status),
             );
             return (
@@ -353,8 +421,8 @@ export function CashierDashboard() {
                     )}
                   </div>
                   <p>
-                    {order ? getOrderShortLabel(order) : "Ordine —"} · comande
-                    separate per reparto
+                    {order ? getOrderShortLabel(order) : "Ordine —"} ·{" "}
+                    {job.job_type === "receipt" ? "1 copia" : "3 copie identiche"}
                     {job.printnode_job_id ? ` · PrintNode #${job.printnode_job_id}` : ""}
                     {job.last_attempt_at
                       ? ` · ultimo tentativo ${formatDateTime(job.last_attempt_at)}`
@@ -363,7 +431,15 @@ export function CashierDashboard() {
                   {staffMessage && <small>{staffMessage}</small>}
                 </div>
                 <div className="print-job-actions">
-                  {job.status === "pending" && order && (
+                  {job.status === "pending" && order && job.job_type === "receipt" && (
+                    <button
+                      disabled={!canWrite || busyJobId === job.id}
+                      onClick={() => setReceiptTarget({ order, job })}
+                    >
+                      Apri scontrino
+                    </button>
+                  )}
+                  {job.status === "pending" && order && job.job_type !== "receipt" && (
                     <button
                       disabled={!canWrite || busyJobId === job.id}
                       onClick={() => void dispatchPrint(order, job.job_type)}
@@ -371,7 +447,19 @@ export function CashierDashboard() {
                       Avvia stampa
                     </button>
                   )}
-                  {["printing", "failed"].includes(job.status) && order && (
+                  {["printing", "failed"].includes(job.status) &&
+                    order &&
+                    job.job_type === "receipt" && (
+                    <button
+                      disabled={!canWrite || busyJobId !== null}
+                      onClick={() => setReceiptTarget({ order, job })}
+                    >
+                      Verifica scontrino
+                    </button>
+                  )}
+                  {["printing", "failed"].includes(job.status) &&
+                    order &&
+                    job.job_type !== "receipt" && (
                     <>
                       <button
                         disabled={!canWrite || busyJobId !== null}
@@ -396,7 +484,7 @@ export function CashierDashboard() {
                       Completa stampe tavolo
                     </button>
                   )}
-                  {canSafelyCancelPrintJob(job) && (
+                  {job.job_type !== "receipt" && canSafelyCancelPrintJob(job) && (
                     <button
                       className="button-danger"
                       disabled={!canWrite || busyJobId !== null}
@@ -415,13 +503,13 @@ export function CashierDashboard() {
         </div>
       </section>
 
-      {historicalFailures.length > 0 && (
+      {historicalJobs.length > 0 && (
         <details className="historical-print-jobs">
           <summary>
-            Stampe fallite di servizi precedenti ({historicalFailures.length})
+            Storico stampe recente ({historicalJobs.length})
           </summary>
           <div className="print-job-list">
-            {historicalFailures.map((job) => {
+            {historicalJobs.map((job) => {
               const order = orderById.get(job.order_id);
               return (
                 <button
@@ -438,6 +526,15 @@ export function CashierDashboard() {
               );
             })}
           </div>
+          {historyHasMore && (
+            <button
+              className="button button-secondary"
+              disabled={historyLoading}
+              onClick={() => void loadMoreHistory()}
+            >
+              {historyLoading ? "Caricamento…" : "Carica storico precedente"}
+            </button>
+          )}
         </details>
       )}
 
@@ -535,13 +632,13 @@ export function CashierDashboard() {
                   <button
                     className="button-primary"
                     disabled={!canWrite || closingOrderId !== null}
-                    onClick={() => void closeTableAndPrint(order)}
+                    onClick={() => void prepareReceipt(order)}
                   >
                     {closingOrderId === order.id
-                      ? "Stampa e chiude…"
+                      ? "Prepara scontrino…"
                       : order.order_type === "takeaway"
-                        ? "Chiudi asporto"
-                        : "Chiudi tavolo"}
+                        ? "Scontrino e chiudi asporto"
+                        : "Scontrino e chiudi tavolo"}
                   </button>
                 </>
               }
@@ -623,6 +720,103 @@ export function CashierDashboard() {
                   Annulla ordine
                 </button>
               )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {receiptTarget && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <section className="ticket-modal">
+            <div className="modal-heading">
+              <div>
+                <p className="eyebrow">Preview scontrino reale</p>
+                <h2>Scontrino · Ordine #{receiptTarget.order.order_number}</h2>
+              </div>
+              <button
+                className="text-button"
+                disabled={closingOrderId !== null}
+                onClick={() => {
+                  setReceiptTarget(null);
+                  setReceiptPrintedManually(false);
+                  setReceiptRetryAccepted(false);
+                }}
+              >
+                Chiudi
+              </button>
+            </div>
+            <div className="ticket-preview print-area">
+              <PrintReceipt order={receiptTarget.order} />
+            </div>
+            <p className="confirmation-warning">
+              Il tavolo resta aperto finché PrintNode conferma il job oppure
+              confermi esplicitamente la stampa manuale.
+            </p>
+            <label className="risk-confirmation">
+              <input
+                type="checkbox"
+                checked={receiptPrintedManually}
+                onChange={(event) => setReceiptPrintedManually(event.target.checked)}
+              />
+              Confermo che lo scontrino è già uscito o è stato stampato dal browser.
+            </label>
+            {["printing", "failed"].includes(receiptTarget.job.status) && (
+              <label className="risk-confirmation">
+                <input
+                  type="checkbox"
+                  checked={receiptRetryAccepted}
+                  onChange={(event) => setReceiptRetryAccepted(event.target.checked)}
+                />
+                Ho verificato la stampante e accetto che un nuovo tentativo possa
+                produrre un doppione.
+              </label>
+            )}
+            <div className="modal-actions">
+              <button
+                className="button button-secondary"
+                disabled={!canWrite || closingOrderId !== null}
+                onClick={() => window.print()}
+              >
+                Stampa dal browser
+              </button>
+              {receiptTarget.job.status === "pending" && (
+                <button
+                  className="button button-secondary"
+                  disabled={!canWrite || closingOrderId !== null}
+                  onClick={() =>
+                    void closeTableAndPrint(
+                      receiptTarget.order,
+                      receiptTarget.job,
+                    )
+                  }
+                >
+                  Invia 1 copia a PrintNode
+                </button>
+              )}
+              {["printing", "failed"].includes(receiptTarget.job.status) && (
+                <button
+                  className="button button-danger"
+                  disabled={
+                    !canWrite ||
+                    !receiptRetryAccepted ||
+                    closingOrderId !== null
+                  }
+                  onClick={() => void retryReceipt(receiptTarget)}
+                >
+                  Crea retry tracciato
+                </button>
+              )}
+              <button
+                className="button button-primary"
+                disabled={
+                  !canWrite ||
+                  !receiptPrintedManually ||
+                  closingOrderId !== null
+                }
+                onClick={() => void confirmReceiptManually(receiptTarget)}
+              >
+                Conferma stampa manuale e chiudi
+              </button>
             </div>
           </section>
         </div>
@@ -783,10 +977,9 @@ export function CashierDashboard() {
               </p>
             )}
             {detailsJob.technical_error && (
-              <details className="technical-error">
-                <summary>Errore tecnico</summary>
-                <code>{detailsJob.technical_error}</code>
-              </details>
+              <p className="print-detail-note">
+                I dettagli tecnici sono stati conservati nel log operativo.
+              </p>
             )}
           </section>
         </div>
@@ -798,7 +991,82 @@ export function CashierDashboard() {
     setSelected({ order, type, jobId: jobFor(order.id, type)?.id });
   }
 
-  async function closeTableAndPrint(order: Order) {
+  async function prepareReceipt(order: Order) {
+    if (!canWrite || closingOrderId) return;
+    setClosingOrderId(order.id);
+    try {
+      const response = await fetch("/api/close-table", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "prepare", orderId: order.id }),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        action?: string;
+        job?: PrintJob;
+      };
+      if (!response.ok || !payload.job) {
+        setMessage([payload.error, payload.action].filter(Boolean).join(" "));
+        return;
+      }
+      setReceiptPrintedManually(false);
+      setReceiptRetryAccepted(false);
+      setReceiptTarget({ order, job: payload.job });
+    } catch {
+      markUnreliable();
+      setMessage("Server non raggiungibile. Nessuna chiusura è stata eseguita.");
+    } finally {
+      setClosingOrderId(null);
+      await load();
+    }
+  }
+
+  async function loadMoreHistory() {
+    if (!historyCursor || historyLoading) return;
+    setHistoryLoading(true);
+    const { data, error } = await createClient()
+      .from("print_jobs")
+      .select("*")
+      .in("status", ["printed", "cancelled"])
+      .lt("created_at", historyCursor)
+      .order("created_at", { ascending: false })
+      .limit(HISTORY_PAGE_SIZE);
+    if (error) {
+      if (!error.code) markUnreliable();
+      setMessage("Storico stampa non disponibile. Riprova.");
+      setHistoryLoading(false);
+      return;
+    }
+    const page = (data ?? []) as PrintJob[];
+    const knownOrderIds = new Set(orders.map((order) => order.id));
+    const missingOrderIds = [
+      ...new Set(
+        page
+          .map((job) => job.order_id)
+          .filter((orderId) => !knownOrderIds.has(orderId)),
+      ),
+    ];
+    if (missingOrderIds.length) {
+      const orderResult = await loadOrdersByIds(createClient(), missingOrderIds);
+      if (!orderResult.error) {
+        setOrders((current) => {
+          const byId = new Map(current.map((order) => [order.id, order]));
+          for (const order of orderResult.data ?? []) byId.set(order.id, order);
+          return [...byId.values()];
+        });
+      }
+    }
+    setJobs((current) => {
+      const byId = new Map(current.map((job) => [job.id, job]));
+      for (const job of page) byId.set(job.id, job);
+      return [...byId.values()];
+    });
+    setHistoryCursor(page.at(-1)?.created_at ?? null);
+    setHistoryHasMore(page.length === HISTORY_PAGE_SIZE);
+    setHistoryLoading(false);
+  }
+
+  async function closeTableAndPrint(order: Order, receiptJob?: PrintJob) {
     if (!canWrite || closingOrderId) return;
     setClosingOrderId(order.id);
 
@@ -806,24 +1074,37 @@ export function CashierDashboard() {
       const response = await fetch("/api/close-table", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderId: order.id }),
+        body: JSON.stringify({
+          action: "dispatch",
+          orderId: order.id,
+          jobId: receiptJob?.id,
+        }),
       });
       const payload = (await response.json()) as {
         error?: string;
+        action?: string;
+        message?: string;
         closed?: boolean;
         copies?: number;
         idempotent?: boolean;
+        job?: PrintJob;
       };
 
-      if (!response.ok || !payload.closed) {
+      if (!payload.closed) {
+        if (payload.job) {
+          setReceiptTarget({ order, job: payload.job });
+        }
         setMessage(
-          payload.error ??
-          `Stampa non riuscita. ${order.order_type === "takeaway" ? "Asporto" : "Tavolo"} non chiuso`,
+          [payload.error ?? payload.message, payload.action]
+            .filter(Boolean)
+            .join(" ") ||
+          `Scontrino non confermato. ${order.order_type === "takeaway" ? "Asporto" : "Tavolo"} ancora aperto`,
         );
         return;
       }
 
       setSelected(null);
+      setReceiptTarget(null);
       setMessage(
         payload.idempotent
           ? `${order.order_type === "takeaway" ? "Asporto" : "Tavolo"} già chiuso`
@@ -838,6 +1119,90 @@ export function CashierDashboard() {
       setClosingOrderId(null);
       await load();
       await refreshPrinter();
+    }
+  }
+
+  async function retryReceipt(target: { order: Order; job: PrintJob }) {
+    if (!canWrite || !receiptRetryAccepted || closingOrderId) return;
+    setClosingOrderId(target.order.id);
+    try {
+      const response = await fetch("/api/close-table", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "retry",
+          orderId: target.order.id,
+          jobId: target.job.id,
+          actionKey: crypto.randomUUID(),
+          reason: "Retry scontrino dopo verifica fisica della stampante in cassa",
+        }),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        action?: string;
+        message?: string;
+        closed?: boolean;
+        job?: PrintJob;
+      };
+      if (payload.job) {
+        setReceiptTarget({ order: target.order, job: payload.job });
+      }
+      setMessage(
+        [payload.error ?? payload.message, payload.action]
+          .filter(Boolean)
+          .join(" "),
+      );
+      if (payload.closed) {
+        setReceiptTarget(null);
+      }
+      setReceiptRetryAccepted(false);
+    } catch {
+      markUnreliable();
+      setMessage("Retry non confermato dal server. Non inviare un altro tentativo.");
+    } finally {
+      setClosingOrderId(null);
+      await load();
+    }
+  }
+
+  async function confirmReceiptManually(target: {
+    order: Order;
+    job: PrintJob;
+  }) {
+    if (!canWrite || !receiptPrintedManually || closingOrderId) return;
+    setClosingOrderId(target.order.id);
+    try {
+      const response = await fetch("/api/close-table", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "manual_confirm",
+          orderId: target.order.id,
+          jobId: target.job.id,
+          expectedVersion: target.order.version,
+          note: "Scontrino uscito o stampato manualmente e verificato dalla cassa",
+        }),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        action?: string;
+        closed?: boolean;
+      };
+      if (!response.ok || !payload.closed) {
+        setMessage([payload.error, payload.action].filter(Boolean).join(" "));
+        return;
+      }
+      setReceiptTarget(null);
+      setReceiptPrintedManually(false);
+      setMessage("Stampa manuale auditata e ordine chiuso.");
+    } catch {
+      markUnreliable();
+      setMessage(
+        "Conferma non ricevuta dal server: verifica lo stato prima di ripetere.",
+      );
+    } finally {
+      setClosingOrderId(null);
+      await load();
     }
   }
 
@@ -1110,17 +1475,82 @@ function printStatusLabel(job: PrintJob) {
   return `${label} — ${getPrintJobStatusLabel(job).toLowerCase()}`;
 }
 
-function isCurrentServiceJob(
-  job: PrintJob,
-  orderById: Map<string, Order>,
-  currentServiceId?: string,
-) {
-  const order = orderById.get(job.order_id);
-  if (!order) return false;
-  if (currentServiceId) return order.service_id === currentServiceId;
-  return ACTIVE.includes(order.status);
-}
-
 function formatOptionalDate(value: string | null) {
   return value ? formatDateTime(value) : "—";
+}
+
+async function loadAllOperationalPrintJobs(
+  supabase: ReturnType<typeof createClient>,
+) {
+  const pageSize = 500;
+  const jobs: PrintJob[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from("print_jobs")
+      .select("*")
+      .in("status", ["pending", "printing", "failed"])
+      .order("created_at", { ascending: false })
+      .range(offset, offset + pageSize - 1);
+    if (error) return { data: null, error };
+    const page = (data ?? []) as PrintJob[];
+    jobs.push(...page);
+    if (page.length < pageSize) return { data: jobs, error: null };
+  }
+}
+
+async function loadOrdersByIds(
+  supabase: ReturnType<typeof createClient>,
+  ids: string[],
+) {
+  const rows: Order[] = [];
+  for (const chunk of chunkValues(ids, 100)) {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*")
+      .in("id", chunk);
+    if (error) return { data: null, error };
+    rows.push(...((data ?? []) as Order[]));
+  }
+  return { data: rows, error: null };
+}
+
+async function loadOrderLinesByIds(
+  supabase: ReturnType<typeof createClient>,
+  ids: string[],
+) {
+  const rows: OrderItem[] = [];
+  for (const chunk of chunkValues(ids, 100)) {
+    const { data, error } = await supabase
+      .from("order_items")
+      .select("*, extras:order_item_extras(*)")
+      .in("order_id", chunk)
+      .order("created_at");
+    if (error) return { data: null, error };
+    rows.push(...((data ?? []) as OrderItem[]));
+  }
+  return { data: rows, error: null };
+}
+
+function chunkValues<T>(values: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function printerAction(reason: PrinterStatus["reason"]) {
+  if (reason === "not_configured") {
+    return "Usa la stampa browser e segnala la configurazione mancante.";
+  }
+  if (reason === "computer_disconnected") {
+    return "Avvia o riconnetti il client PrintNode sul computer Dell.";
+  }
+  if (reason === "printer_offline") {
+    return "Controlla alimentazione, carta e collegamento della stampante.";
+  }
+  if (reason === "timeout") {
+    return "Non ristampare subito: verifica prima se il foglio è uscito.";
+  }
+  return "Verifica la rete; per lo scontrino è disponibile il fallback browser.";
 }

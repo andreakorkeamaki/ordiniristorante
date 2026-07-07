@@ -12,10 +12,28 @@ export async function loadOrderForPrint(
   supabase: SupabaseClient,
   orderId: string,
 ) {
-  const [orderResult, tableResult, profilesResult, linesResult] = await Promise.all([
-    supabase.from("orders").select("*").eq("id", orderId).maybeSingle(),
-    supabase.from("restaurant_tables").select("*"),
-    supabase.from("profiles").select("id, full_name, role, active"),
+  const orderResult = await supabase
+    .from("orders")
+    .select("*")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (orderResult.error || !orderResult.data) return null;
+  const rawOrder = orderResult.data as Order;
+
+  const [tableResult, profileResult, linesResult] = await Promise.all([
+    rawOrder.table_id
+      ? supabase
+          .from("restaurant_tables")
+          .select("*")
+          .eq("id", rawOrder.table_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    supabase
+      .from("profiles")
+      .select("id, full_name, role, active")
+      .eq("id", rawOrder.created_by)
+      .maybeSingle(),
     supabase
       .from("order_items")
       .select(
@@ -26,22 +44,13 @@ export async function loadOrderForPrint(
   ]);
 
   if (
-    orderResult.error ||
     tableResult.error ||
-    profilesResult.error ||
-    linesResult.error ||
-    !orderResult.data
+    profileResult.error ||
+    linesResult.error
   ) {
     return null;
   }
 
-  const rawOrder = orderResult.data as Order;
-  const tables = new Map(
-    ((tableResult.data ?? []) as RestaurantTable[]).map((table) => [table.id, table]),
-  );
-  const profiles = new Map(
-    ((profilesResult.data ?? []) as Profile[]).map((profile) => [profile.id, profile]),
-  );
   const items = (linesResult.data ?? []).map((row) => {
     const printableRow = row as OrderItem & {
       menu_item?: {
@@ -64,8 +73,8 @@ export async function loadOrderForPrint(
 
   return {
     ...rawOrder,
-    table: rawOrder.table_id ? tables.get(rawOrder.table_id) : undefined,
-    waiter: profiles.get(rawOrder.created_by),
+    table: (tableResult.data as RestaurantTable | null) ?? undefined,
+    waiter: (profileResult.data as Profile | null) ?? undefined,
     items,
   } satisfies Order;
 }

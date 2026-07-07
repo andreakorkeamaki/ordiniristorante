@@ -1,5 +1,5 @@
 begin;
-select plan(113);
+select plan(137);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -25,6 +25,72 @@ select has_index(
   'restaurant_services_one_open_idx',
   'only one restaurant service can be open'
 );
+select has_index(
+  'public',
+  'restaurant_settings',
+  'restaurant_settings_singleton_idx',
+  'restaurant settings are a singleton'
+);
+select has_index(
+  'public',
+  'print_jobs',
+  'print_jobs_one_receipt_per_order_idx',
+  'each order has one primary receipt job'
+);
+select has_index(
+  'public',
+  'print_jobs',
+  'print_jobs_operational_queue_idx',
+  'the complete operational print queue is indexed'
+);
+select has_function(
+  'public',
+  'get_or_create_receipt_print_job',
+  array['uuid'],
+  'receipt creation is atomic and idempotent'
+);
+select has_function(
+  'public',
+  'claim_print_job',
+  array['uuid'],
+  'print jobs have an atomic claim RPC'
+);
+select has_function(
+  'public',
+  'request_receipt_retry',
+  array['uuid', 'uuid', 'text'],
+  'receipt retries are persisted'
+);
+select has_function(
+  'public',
+  'confirm_receipt_manual_and_close',
+  array['uuid', 'bigint', 'text'],
+  'manual receipt confirmation and close are atomic'
+);
+select has_function(
+  'public',
+  'get_service_close_blockers',
+  array['uuid'],
+  'service closure exposes blocker counts'
+);
+select has_function(
+  'public',
+  'reorder_menu_categories',
+  array['uuid[]'],
+  'category reorder is transactional'
+);
+select has_column(
+  'public',
+  'restaurant_services',
+  'forced_close',
+  'forced service closure is audited'
+);
+select has_column(
+  'public',
+  'restaurant_services',
+  'forced_close_reason',
+  'forced service closure stores its reason'
+);
 select has_column('public', 'orders', 'service_id', 'orders belong to a service');
 select has_column('public', 'orders', 'order_type', 'orders distinguish tables and takeaways');
 select has_column('public', 'orders', 'takeaway_name', 'takeaways store the customer name');
@@ -33,13 +99,19 @@ select has_column(
   'public',
   'restaurant_settings',
   'dine_in_print_copies',
-  'table print copies are configurable'
+  'table print copy invariant is stored'
 );
 select has_column(
   'public',
   'restaurant_settings',
   'takeaway_print_copies',
-  'takeaway print copies are configurable'
+  'takeaway print copy invariant is stored'
+);
+select has_column(
+  'public',
+  'restaurant_settings',
+  'order_ticket_print_mode',
+  'order ticket print mode is configurable'
 );
 select has_function(
   'public',
@@ -379,8 +451,8 @@ select is(
     where target_order.takeaway_name = 'Giulia Test'
       and job.job_type = 'new_order'
   ),
-  1,
-  'takeaway jobs use the takeaway copy setting'
+  3,
+  'takeaway command jobs keep the three-sheet invariant'
 );
 
 update public.profiles
@@ -533,9 +605,17 @@ select is(
   'the saved product order is persisted in sort_order'
 );
 
-select lives_ok(
+select throws_ok(
   $$update public.restaurant_settings set dine_in_print_copies = 2$$,
-  'an admin can change the table copy setting'
+  '23514',
+  null,
+  'command copy count cannot diverge from three'
+);
+select throws_ok(
+  $$update public.restaurant_settings set order_ticket_print_mode = 'unknown'$$,
+  '23514',
+  null,
+  'command print mode must be one of the supported modes'
 );
 
 update public.profiles
@@ -576,8 +656,8 @@ select is(
     where order_id = '00000000-0000-4000-9000-000000009923'
       and job_type = 'new_order'
   ),
-  2,
-  'new table jobs use the updated copy setting'
+  3,
+  'new table jobs always use three copies'
 );
 select is(
   (
@@ -587,7 +667,7 @@ select is(
       and job_type = 'new_order'
   ),
   3,
-  'changing settings does not alter an existing queued job'
+  'existing queued jobs remain at three copies'
 );
 
 update public.profiles
@@ -985,6 +1065,164 @@ select is(
   'cancelling preserves the completed new-order print'
 );
 
+update public.print_jobs
+set status = 'printed',
+    printed_at = coalesce(printed_at, now())
+where order_id in (
+    select id
+    from public.orders
+    where service_id = (
+      select id from public.restaurant_services where closed_at is null
+    )
+  )
+  and status = 'printing';
+
+insert into public.print_jobs(
+  order_id,
+  job_type,
+  idempotency_key,
+  status,
+  copies,
+  labels,
+  created_by
+) values (
+  '00000000-0000-4000-9000-000000009922',
+  'reprint',
+  '00000000-0000-4000-9000-000000009922:reprint:service-close-blocker',
+  'printing',
+  3,
+  '["RISTAMPA"]'::jsonb,
+  '00000000-0000-4000-9000-000000009901'
+);
+
+select throws_ok(
+  $$
+    select public.close_service(
+      (select id from public.restaurant_services where closed_at is null),
+      true,
+      'Tentativo forzato con job ancora in stampa'
+    )
+  $$,
+  'P0001',
+  'Ci sono 1 job in stampa o da verificare',
+  'service closure cannot hide a printing job even when forced'
+);
+select lives_ok(
+  $$
+    select public.mark_print_job_manual(
+      (
+        select id
+        from public.print_jobs
+        where idempotency_key =
+          '00000000-0000-4000-9000-000000009922:reprint:service-close-blocker'
+      )
+    )
+  $$,
+  'the printing job is explicitly resolved before service closure'
+);
+
+savepoint receipt_state_machine_tests;
+
+update public.orders
+set status = 'bill_requested'
+where id = '00000000-0000-4000-9000-000000009922';
+
+select lives_ok(
+  $$
+    select public.get_or_create_receipt_print_job(
+      '00000000-0000-4000-9000-000000009922'
+    )
+  $$,
+  'receipt job is created before printing'
+);
+select is(
+  (
+    select job_type::text
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009922'
+      and job_type = 'receipt'
+  ),
+  'receipt',
+  'receipt job type is persisted'
+);
+select is(
+  (
+    select copies
+    from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009922'
+      and job_type = 'receipt'
+  ),
+  1,
+  'receipt records exactly one copy'
+);
+select is(
+  (
+    select public.claim_print_job((
+      select id
+      from public.print_jobs
+      where order_id = '00000000-0000-4000-9000-000000009922'
+        and job_type = 'receipt'
+    )) -> 'job' ->> 'status'
+  ),
+  'printing',
+  'the first receipt claim starts printing'
+);
+select is(
+  (
+    select (public.claim_print_job((
+      select id
+      from public.print_jobs
+      where order_id = '00000000-0000-4000-9000-000000009922'
+        and job_type = 'receipt'
+    )) ->> 'claimed')::boolean
+  ),
+  false,
+  'a concurrent second claim is explicitly rejected'
+);
+select throws_ok(
+  $$select public.cancel_order('00000000-0000-4000-9000-000000009922')$$,
+  'P0001',
+  'Scontrino in stampa o da verificare: risolvi il job prima di annullare',
+  'cancellation cannot race a claimed receipt'
+);
+select throws_ok(
+  $$
+    select public.close_order(
+      '00000000-0000-4000-9000-000000009922',
+      (select version from public.orders where id = '00000000-0000-4000-9000-000000009922')
+    )
+  $$,
+  'P0001',
+  'Lo scontrino non è ancora confermato',
+  'an order cannot close before receipt confirmation'
+);
+select lives_ok(
+  $$
+    select public.confirm_receipt_manual_and_close(
+      (
+        select id
+        from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009922'
+          and job_type = 'receipt'
+      ),
+      (select version from public.orders where id = '00000000-0000-4000-9000-000000009922'),
+      'Scontrino stampato manualmente e verificato nel test'
+    )
+  $$,
+  'manual fallback confirms receipt and closes atomically'
+);
+select is(
+  (
+    select status::text
+    from public.orders
+    where id = '00000000-0000-4000-9000-000000009922'
+  ),
+  'closed',
+  'manual receipt confirmation really closes the database row'
+);
+
+rollback to savepoint receipt_state_machine_tests;
+
 select throws_ok(
   $$
     select public.close_service(
@@ -993,14 +1231,15 @@ select throws_ok(
     )
   $$,
   'P0001',
-  'Ci sono ancora 1 tavoli aperti',
+  'Ci sono ancora 1 ordini aperti',
   'closing without confirmation refuses open tables'
 );
 select lives_ok(
   $$
     select public.close_service(
       (select id from public.restaurant_services where closed_at is null),
-      true
+      true,
+      'Chiusura forzata controllata dal test database'
     )
   $$,
   'confirmed service closure succeeds'

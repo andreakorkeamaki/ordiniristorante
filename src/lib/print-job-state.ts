@@ -105,6 +105,7 @@ export function printJobTypeLabel(type: PrintJobType) {
     order_update: "AGGIORNAMENTO COMANDA",
     cancellation: "ANNULLAMENTO",
     reprint: "RISTAMPA",
+    receipt: "SCONTRINO",
   };
   return labels[type];
 }

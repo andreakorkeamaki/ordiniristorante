@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useConnection } from "@/components/connection-provider";
 import { useCurrentService } from "@/hooks/use-current-service";
 import { ACTIVE_ORDER_STATUSES, ORDER_STATUS_LABELS } from "@/lib/constants";
 import { formatDateTime, formatTime } from "@/lib/format";
 import { groupOrderItemsByPreparationArea } from "@/lib/order-items";
+import { readFailureState } from "@/lib/reliable-data-state";
 import { getPrintJobStatusLabel } from "@/lib/print-job-state";
 import {
   formatServiceLabel,
@@ -20,8 +21,17 @@ type TakeawayOrder = Order & { print_jobs?: PrintJob[] };
 
 export function TakeawayDashboard() {
   const router = useRouter();
-  const { canWrite, blockReason, markUnreliable } = useConnection();
-  const { service, loading: serviceLoading } = useCurrentService();
+  const {
+    canWrite: connectionCanWrite,
+    blockReason,
+    markUnreliable,
+  } = useConnection();
+  const {
+    service,
+    loading: serviceLoading,
+    error: serviceError,
+    state: serviceState,
+  } = useCurrentService();
   const [orders, setOrders] = useState<TakeawayOrder[]>([]);
   const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
   const [query, setQuery] = useState("");
@@ -29,9 +39,26 @@ export function TakeawayDashboard() {
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [dataState, setDataState] = useState<"loading" | "ready" | "stale" | "error">(
+    "loading",
+  );
+  const [loadError, setLoadError] = useState("");
+  const loadGeneration = useRef(0);
+  const hasSnapshot = useRef(false);
+  const canWrite =
+    connectionCanWrite && dataState === "ready" && serviceState === "ready";
 
   const load = useCallback(async () => {
     if (serviceLoading) return;
+    if (serviceState !== "ready") {
+      setLoadError(
+        serviceError || "Stato del servizio non disponibile. Riprova.",
+      );
+      setDataState(readFailureState(hasSnapshot.current));
+      setLoading(false);
+      return;
+    }
+    const generation = ++loadGeneration.current;
 
     const supabase = createClient();
     const [ordersResult, profilesResult] = await Promise.all([
@@ -50,9 +77,13 @@ export function TakeawayDashboard() {
     const error = ordersResult.error ?? profilesResult.error;
     if (error) {
       if (!error.code) markUnreliable();
+      if (generation !== loadGeneration.current) return;
+      setLoadError("Asporti non aggiornati. I dati precedenti restano visibili.");
+      setDataState(readFailureState(hasSnapshot.current));
       setLoading(false);
       return;
     }
+    if (generation !== loadGeneration.current) return;
 
     setOrders(
       service
@@ -69,8 +100,11 @@ export function TakeawayDashboard() {
         ]),
       ),
     );
+    hasSnapshot.current = true;
+    setLoadError("");
+    setDataState("ready");
     setLoading(false);
-  }, [markUnreliable, service, serviceLoading]);
+  }, [markUnreliable, service, serviceError, serviceLoading, serviceState]);
 
   useEffect(() => {
     queueMicrotask(() => void load());
@@ -120,12 +154,20 @@ export function TakeawayDashboard() {
     });
   const serviceOperational = Boolean(service && !isPreviousService(service));
 
-  if (loading || serviceLoading) {
+  if ((loading || serviceLoading) && dataState === "loading") {
     return <div className="loader" aria-label="Caricamento asporti" />;
   }
 
   return (
     <>
+      {dataState !== "ready" && (
+        <section className="connection-action-hint" role="alert">
+          <strong>Dati asporti non affidabili.</strong> {loadError}
+          <button className="text-button" onClick={() => void load()}>
+            Riprova
+          </button>
+        </section>
+      )}
       <section className="workspace-heading">
         <div>
           <p className="eyebrow">Ritiro</p>

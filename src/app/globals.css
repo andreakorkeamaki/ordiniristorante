@@ -2480,15 +2480,68 @@ code {
 }
 
 .department-print-setting {
+  display: grid;
+  gap: 0.85rem;
   padding: 0.85rem;
   border: 1px solid var(--line);
-  border-radius: 0.65rem;
+  border-radius: 0.5rem;
   background: var(--surface);
 }
 
 .department-print-setting p {
   margin: 0.3rem 0 0;
   color: var(--muted);
+}
+
+.print-mode-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.6rem;
+}
+
+.print-mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--panel);
+}
+
+.print-mode-option input {
+  margin-top: 0.2rem;
+}
+
+.print-mode-option span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.print-mode-option small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.settings-ticket-preview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.6rem;
+}
+
+.settings-ticket-preview pre {
+  min-height: 18rem;
+  margin: 0;
+  padding: 0.7rem;
+  overflow-x: auto;
+  border: 1px dashed #9d8f7f;
+  border-radius: 0.35rem;
+  color: #1a1512;
+  background: #fffdf8;
+  font-family: "Courier New", monospace;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
 }
 
 .settings-form .panel-title {
@@ -3026,4 +3079,42 @@ code {
     break-after: page;
     font-size: 10pt;
   }
+}
+
+.receipt-ticket {
+  max-width: 80mm;
+  margin-inline: auto;
+}
+
+.receipt-lines p,
+.receipt-totals > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.receipt-totals {
+  margin: 1rem 0;
+  border-top: 1px dashed currentColor;
+  padding-top: 0.75rem;
+}
+
+.receipt-totals dt,
+.receipt-totals dd {
+  margin: 0;
+}
+
+.receipt-grand-total {
+  margin-top: 0.75rem;
+  border-top: 2px solid currentColor;
+  padding-top: 0.75rem;
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+
+.service-blockers {
+  margin-block: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.875rem;
 }

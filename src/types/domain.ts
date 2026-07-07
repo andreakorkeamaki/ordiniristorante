@@ -8,7 +8,13 @@ export type OrderStatus =
   | "closed"
   | "cancelled";
 export type PrintStatus = "pending" | "printing" | "printed" | "failed" | "cancelled";
-export type PrintJobType = "new_order" | "order_update" | "cancellation" | "reprint";
+export type PrintJobType =
+  | "new_order"
+  | "order_update"
+  | "cancellation"
+  | "reprint"
+  | "receipt";
+export type OrderTicketPrintMode = "legacy_three_copies" | "department_split";
 export type PreparationArea = "pizzeria" | "cucina" | "bar" | "cassa";
 export type ServicePeriod = "pranzo" | "cena" | "recupero";
 export type OrderType = "dine_in" | "takeaway";
@@ -26,6 +32,7 @@ export interface RestaurantSettings {
   cover_charge: number;
   dine_in_print_copies: number;
   takeaway_print_copies: number;
+  order_ticket_print_mode: OrderTicketPrintMode;
   allergen_notice: string | null;
   allergen_notice_en: string | null;
   ticket_footer: string | null;
@@ -90,6 +97,8 @@ export interface RestaurantService {
   closed_by: string | null;
   opened_at: string;
   closed_at: string | null;
+  forced_close?: boolean;
+  forced_close_reason?: string | null;
   created_at: string;
   updated_at: string;
 }
