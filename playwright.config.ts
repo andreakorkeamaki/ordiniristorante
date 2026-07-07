@@ -7,7 +7,7 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   projects: [
-    { name: "mobile", use: { ...devices["iPhone 13"] } },
+    { name: "mobile", use: { ...devices["Pixel 5"] } },
     { name: "tablet", use: { ...devices["Desktop Chrome"], viewport: { width: 1180, height: 820 } } },
   ],
   webServer: {
