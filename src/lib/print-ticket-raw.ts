@@ -13,7 +13,6 @@ export const PRINT_JOB_LABELS: Record<PrintJobType, string> = {
 const LINE_WIDTH = 24;
 const DOUBLE_TEXT_SIZE = Buffer.from([0x1d, 0x21, 0x11]);
 const CUT = Buffer.from([0x1d, 0x56, 0x41, 0x10]);
-const PIZZA_CATEGORY_SLUGS = new Set(["rosse", "bianche", "speciali"]);
 
 function ascii(value: string) {
   return value
@@ -57,15 +56,11 @@ export function getPinsaPrintPrefix(categorySlug: string | null | undefined) {
 }
 
 function isPizzaItem(item: OrderItem) {
-  return PIZZA_CATEGORY_SLUGS.has(item.category_slug ?? "");
+  return item.preparation_area_snapshot === "pizzeria";
 }
 
 function isKitchenItem(item: OrderItem) {
-  return (
-    !isPizzaItem(item) &&
-    item.preparation_area_snapshot !== "bar" &&
-    item.preparation_area_snapshot !== "cassa"
-  );
+  return item.preparation_area_snapshot === "cucina";
 }
 
 function orderTime(order: Order) {

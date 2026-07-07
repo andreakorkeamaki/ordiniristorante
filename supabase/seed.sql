@@ -1015,7 +1015,7 @@ insert into public.menu_items (
   preparation_area, sort_order, ingredients
 ) values (
   '00000000-0000-4000-8000-000000001045', '00000000-0000-4000-8000-000000000105', 'All You Can Eat · Adulti', 16.90,
-  true, true, true, true, 'cucina',
+  true, true, true, true, 'pizzeria',
   0, 'Prezzo per persona'
 )
 on conflict (id) do update set
@@ -1035,7 +1035,7 @@ insert into public.menu_items (
   preparation_area, sort_order, ingredients
 ) values (
   '00000000-0000-4000-8000-000000001046', '00000000-0000-4000-8000-000000000105', 'All You Can Eat · Bambini', 12.90,
-  true, true, true, true, 'cucina',
+  true, true, true, true, 'pizzeria',
   1, 'Prezzo per persona'
 )
 on conflict (id) do update set

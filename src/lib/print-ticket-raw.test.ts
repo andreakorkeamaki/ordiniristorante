@@ -236,6 +236,21 @@ describe("buildRaw80mmTicket", () => {
         {
           ...order.items![0],
           id: "item-3",
+          menu_item_id: "ayce-adulti",
+          item_name_snapshot: "All You Can Eat · Adulti",
+          item_price_snapshot: 16.9,
+          quantity: 2,
+          line_total: 33.8,
+          preparation_area_snapshot: "pizzeria",
+          category_name: "Formula All You Can Eat",
+          category_slug: "all-you-can-eat",
+          category_sort_order: 4,
+          notes: "Domanda giro pizzeria",
+          extras: [],
+        },
+        {
+          ...order.items![0],
+          id: "item-4",
           menu_item_id: "acqua",
           item_name_snapshot: "Acqua",
           item_price_snapshot: 2,
@@ -260,14 +275,19 @@ describe("buildRaw80mmTicket", () => {
     expect(copies).toHaveLength(3);
     expect(copies[0]).toContain("COPIA PIZZERIA");
     expect(copies[0]).toContain("1R Pinsa Margherita");
+    expect(copies[0]).toContain("2 All You Can Eat");
+    expect(copies[0]).toContain("Nota: Domanda giro");
+    expect(copies[0]).not.toContain("2R All You Can Eat");
     expect(copies[0]).not.toContain("Suppli");
     expect(copies[1]).toContain("COPIA CUCINA");
     expect(copies[1]).toContain("1 Suppli");
     expect(copies[1]).not.toContain("Pinsa Margherita");
+    expect(copies[1]).not.toContain("All You Can Eat");
     expect(copies[1]).not.toContain("Acqua");
     expect(copies[2]).toContain("COPIA COMPLETA / CASSA");
     expect(copies[2]).toContain("Pinsa Margherita");
     expect(copies[2]).toContain("Suppli");
+    expect(copies[2]).toContain("All You Can Eat");
     expect(copies[2]).toContain("Acqua");
     expect(copies[2]).not.toMatch(/PREZZ|SUBTOTALE|TOTALE|SCONTO|COPERTO|EUR|EURO/i);
     expect(copies[2]).not.toContain("18,80");

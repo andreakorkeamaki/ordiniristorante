@@ -25,7 +25,9 @@ const text = (value) =>
   value == null ? "null" : `'${String(value).replaceAll("'", "''")}'`;
 const boolean = (value) => (value ? "true" : "false");
 const areaForCategory = (categoryId) => {
-  if (["bianche", "rosse", "speciali"].includes(categoryId)) return "pizzeria";
+  if (["bianche", "rosse", "speciali", "all-you-can-eat"].includes(categoryId)) {
+    return "pizzeria";
+  }
   if (categoryId === "bevande") return "bar";
   if (categoryId === "extra") return "cassa";
   return "cucina";
