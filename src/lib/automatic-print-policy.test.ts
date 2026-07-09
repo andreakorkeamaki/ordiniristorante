@@ -59,11 +59,16 @@ describe("getWaiterInitialPrintDecision", () => {
     ).toBe("invalid-status");
   });
 
-  it("consente ad amministratore e cassa di inviare una bozza", () => {
+  it("consente ad amministratore e cassa di inviare una bozza o una comanda confermata non stampata", () => {
     const draft = {
       created_by: "waiter-1",
       status: "draft" as const,
       sent_to_cashier_at: null,
+    };
+    const confirmed = {
+      created_by: "waiter-1",
+      status: "confirmed" as const,
+      sent_to_cashier_at: "2026-07-01T09:59:00.000Z",
     };
 
     expect(
@@ -71,6 +76,9 @@ describe("getWaiterInitialPrintDecision", () => {
     ).toBe("allowed");
     expect(
       getInitialPrintDecision({ id: "cashier-1", role: "cashier" }, draft, now),
+    ).toBe("allowed");
+    expect(
+      getInitialPrintDecision({ id: "cashier-1", role: "cashier" }, confirmed, now),
     ).toBe("allowed");
   });
 

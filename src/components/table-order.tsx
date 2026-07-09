@@ -65,12 +65,14 @@ export function TableOrder({
   const [activeCategory, setActiveCategory] = useState("");
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState<"saved" | "saving" | "error">("saved");
+  const [submitting, setSubmitting] = useState(false);
   const [mutationError, setMutationError] = useState("");
   const [presence, setPresence] = useState<string[]>([]);
   const [externalUpdate, setExternalUpdate] = useState(false);
   const [updatePrintStatus, setUpdatePrintStatus] = useState<PrintStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const selfUpdate = useRef(false);
+  const submittingRef = useRef(false);
   const initialLoadStarted = useRef(false);
   const baseLoaded = useRef(false);
   const loadedSuccessfully = useRef(false);
@@ -742,6 +744,7 @@ export function TableOrder({
           className="button button-primary button-large"
           aria-describedby={submissionIssue ? "order-send-hint" : undefined}
           disabled={
+            submitting ||
             !operationsEnabled ||
             (order.status === "draft" ? submissionIssue !== null : !submissionType)
           }
@@ -749,11 +752,13 @@ export function TableOrder({
             if (submissionType) void submitOrder(submissionType);
           }}
         >
-          {getSubmissionLabel({
-            orderStatus: order.status,
-            updatePrintStatus,
-            canVerifySubmission,
-          })}
+          {submitting
+            ? "Invio..."
+            : getSubmissionLabel({
+                orderStatus: order.status,
+                updatePrintStatus,
+                canVerifySubmission,
+              })}
         </button>
       </div>
     </>
@@ -829,6 +834,7 @@ export function TableOrder({
   async function submitOrder(
     type: Extract<PrintJobType, "new_order" | "order_update">,
   ) {
+    if (submittingRef.current) return;
     if (!operationsEnabled) {
       setSaving("error");
       setMutationError(
@@ -837,6 +843,8 @@ export function TableOrder({
       return;
     }
 
+    submittingRef.current = true;
+    setSubmitting(true);
     setSaving("saving");
     setMutationError("");
     selfUpdate.current = true;
@@ -883,6 +891,8 @@ export function TableOrder({
         "Connessione non affidabile. Non è possibile confermare l'invio: non chiudere o ricaricare.",
       );
     } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
       window.setTimeout(() => {
         selfUpdate.current = false;
       }, 500);
