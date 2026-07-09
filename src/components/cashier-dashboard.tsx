@@ -9,8 +9,8 @@ import { formatCurrency, formatDateTime, formatTime } from "@/lib/format";
 import { getOrderLocationLabel, getOrderShortLabel } from "@/lib/order-display";
 import {
   aggregateIdenticalOrderItems,
-  groupOrderItemsByPreparationArea,
 } from "@/lib/order-items";
+import { groupOrderItemsByPrintDepartment } from "@/lib/print-ticket-format";
 import {
   canSafelyCancelPrintJob,
   getPrintJobDisplayState,
@@ -680,7 +680,7 @@ export function CashierDashboard() {
               </p>
             )}
             <div className="ticket-preview print-area">
-              {groupOrderItemsByPreparationArea(selected.order.items ?? []).map((department) => (
+              {groupOrderItemsByPrintDepartment(selected.order.items ?? []).map((department) => (
                 <PrintTicket
                   department={department}
                   order={selected.order}

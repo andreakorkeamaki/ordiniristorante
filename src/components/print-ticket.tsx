@@ -1,6 +1,7 @@
 import { formatDateTime, formatTime } from "@/lib/format";
 import { getOrderLocationLabel } from "@/lib/order-display";
 import type { PreparationAreaGroup } from "@/lib/order-items";
+import { formatPrintItemName } from "@/lib/print-ticket-format";
 import type { Order } from "@/types/domain";
 
 export function PrintTicket({
@@ -30,7 +31,7 @@ export function PrintTicket({
       <div className="ticket-lines">
         {department.items.map((item) => (
           <div key={item.id}>
-            <p><strong>{item.quantity}×</strong> {item.item_name_snapshot}</p>
+            <p><strong>{item.quantity}×</strong> {formatPrintItemName(item)}</p>
             {item.notes && <small>— {item.notes}</small>}
             {item.extras.map((extra) => (
               <small key={extra.id}>+ {extra.quantity}× {extra.extra_name_snapshot}</small>

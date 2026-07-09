@@ -2544,6 +2544,13 @@ code {
   white-space: pre-wrap;
 }
 
+.print-test-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
 .settings-form .panel-title {
   margin: 0 -1rem;
 }
