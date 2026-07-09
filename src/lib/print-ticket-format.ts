@@ -1,7 +1,5 @@
 import {
   aggregatePreparationOrderItems,
-  PREPARATION_AREA_LABELS,
-  PREPARATION_AREA_ORDER,
   type PreparationAreaGroup,
 } from "@/lib/order-items";
 import type { OrderItem } from "@/types/domain";
@@ -29,18 +27,28 @@ export function groupOrderItemsByPrintDepartment(
   items: OrderItem[],
 ): PreparationAreaGroup[] {
   const aggregated = aggregatePreparationOrderItems(items);
+  const pizzaItems = aggregated.filter(
+    (item) => item.preparation_area_snapshot === "pizzeria" || isAyceItem(item),
+  );
+  const kitchenItems = aggregated.filter(
+    (item) => item.preparation_area_snapshot === "cucina" || isAyceItem(item),
+  );
 
-  return PREPARATION_AREA_ORDER.map((area) => ({
-    area,
-    label: PREPARATION_AREA_LABELS[area],
-    items: aggregated.filter((item) => {
-      if (area === "pizzeria") {
-        return item.preparation_area_snapshot === "pizzeria" || isAyceItem(item);
-      }
-      if (area === "cucina") {
-        return item.preparation_area_snapshot === "cucina" || isAyceItem(item);
-      }
-      return item.preparation_area_snapshot === area;
-    }),
-  })).filter((group) => group.items.length > 0);
+  return [
+    {
+      area: "pizzeria",
+      label: "COPIA PIZZERIA",
+      items: pizzaItems,
+    },
+    {
+      area: "cucina",
+      label: "COPIA CUCINA",
+      items: kitchenItems,
+    },
+    {
+      area: "cassa",
+      label: "COPIA COMPLETA / CASSA",
+      items: aggregated,
+    },
+  ];
 }
