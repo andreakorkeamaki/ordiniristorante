@@ -42,6 +42,7 @@ export function AdminDashboard() {
     useState<OrderTicketPrintMode>("department_split");
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [saving, setSaving] = useState(false);
+  const [testPrinting, setTestPrinting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [draggedProduct, setDraggedProduct] = useState<{
     categoryId: string;
@@ -376,6 +377,23 @@ export function AdminDashboard() {
               )}
             </div>
             <PrintModePreview mode={printModePreview} />
+            <div className="print-test-actions">
+              <button
+                className="button button-secondary"
+                disabled={!canWrite || testPrinting}
+                onClick={() => void requestTestPrint()}
+                type="button"
+              >
+                {testPrinting ? "Invio prova…" : "Prova stampa comanda"}
+              </button>
+              <button
+                className="button button-secondary"
+                onClick={openBrowserTestPrint}
+                type="button"
+              >
+                Stampa browser
+              </button>
+            </div>
           </div>
           <label>Avviso allergeni<textarea name="allergen_notice" defaultValue={settings.allergen_notice ?? ""} /></label>
           <label>Testo finale ticket<textarea name="ticket_footer" defaultValue={settings.ticket_footer ?? ""} /></label>
@@ -499,6 +517,52 @@ export function AdminDashboard() {
         data.get("order_ticket_print_mode"),
       ),
     }).eq("id", settings!.id));
+  }
+
+  async function requestTestPrint() {
+    if (!canWrite) {
+      setFeedback({
+        text: blockReason ?? "Connessione non verificata. Prova non eseguita.",
+        type: "error",
+      });
+      return;
+    }
+
+    setTestPrinting(true);
+    try {
+      const response = await fetch("/api/print-test-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: printModePreview }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        printNodeJobId?: number;
+      };
+
+      setFeedback({
+        text: response.ok
+          ? `Prova inviata alla stampante${payload.printNodeJobId ? ` #${payload.printNodeJobId}` : ""}`
+          : payload.error ?? "Prova di stampa non riuscita",
+        type: response.ok ? "success" : "error",
+      });
+    } catch {
+      markUnreliable();
+      setFeedback({
+        text: "Connessione non affidabile. Prova di stampa non inviata.",
+        type: "error",
+      });
+    } finally {
+      setTestPrinting(false);
+    }
+  }
+
+  function openBrowserTestPrint() {
+    const query = new URLSearchParams({
+      autoprint: "1",
+      mode: printModePreview,
+    });
+    window.open(`/admin/print-test?${query.toString()}`, "_blank", "noopener");
   }
 
   async function moveCategory(category: MenuCategory, delta: number) {
@@ -641,6 +705,7 @@ PINSE ROSSE
 1x R Diavola
   + mozzarella
   Nota: senza piccante
+6x AYCE Adulti
 
 ANTIPASTI E FRITTI
 1 Suppli
@@ -662,6 +727,7 @@ COMANDA #42
   + mozzarella
   Nota: senza piccante
 1B Boscaiola
+6 AYCE Adulti
 
 Tavolo: 12
 Orario ordine: 21:35`}</pre>
@@ -669,6 +735,7 @@ Orario ordine: 21:35`}</pre>
 NUOVA COMANDA
 COMANDA #42
 
+6 AYCE Adulti
 1 Suppli
 1 Carbonara
 1 Contorno verdure
@@ -679,14 +746,14 @@ Orario ordine: 21:35`}</pre>
 NUOVA COMANDA
 COMANDA #42
 
-Diavola
-1 x 9,00 EUR  9,00 EUR
-Suppli
-1 x 3,00 EUR  3,00 EUR
-Acqua
-1 x 2,00 EUR  2,00 EUR
+1R Diavola
+1B Boscaiola
+6 AYCE Adulti
+1 Suppli
+1 Carbonara
+1 Contorno verdure
+1 Acqua
 
-TOTALE 14,00 EUR
 Tavolo: 12
 Orario ordine: 21:35`}</pre>
     </div>

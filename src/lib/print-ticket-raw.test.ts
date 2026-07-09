@@ -275,20 +275,21 @@ describe("buildRaw80mmTicket", () => {
     expect(copies).toHaveLength(3);
     expect(copies[0]).toContain("COPIA PIZZERIA");
     expect(copies[0]).toContain("1R Pinsa Margherita");
-    expect(copies[0]).toContain("2 All You Can Eat");
+    expect(copies[0]).toContain("2 AYCE Adulti");
     expect(copies[0]).toContain("Nota: Domanda giro");
-    expect(copies[0]).not.toContain("2R All You Can Eat");
+    expect(copies[0]).not.toContain("2R AYCE");
     expect(copies[0]).not.toContain("Suppli");
     expect(copies[1]).toContain("COPIA CUCINA");
     expect(copies[1]).toContain("1 Suppli");
     expect(copies[1]).not.toContain("Pinsa Margherita");
-    expect(copies[1]).not.toContain("All You Can Eat");
+    expect(copies[1]).toContain("2 AYCE Adulti");
     expect(copies[1]).not.toContain("Acqua");
     expect(copies[2]).toContain("COPIA COMPLETA / CASSA");
     expect(copies[2]).toContain("Pinsa Margherita");
     expect(copies[2]).toContain("Suppli");
-    expect(copies[2]).toContain("All You Can Eat");
+    expect(copies[2]).toContain("AYCE Adulti");
     expect(copies[2]).toContain("Acqua");
+    expect(body).not.toContain("?");
     expect(copies[2]).not.toMatch(/PREZZ|SUBTOTALE|TOTALE|SCONTO|COPERTO|EUR|EURO/i);
     expect(copies[2]).not.toContain("18,80");
     expect(copies[2]).not.toContain("10,00");
@@ -296,5 +297,39 @@ describe("buildRaw80mmTicket", () => {
     expect(copies[2]).not.toContain("2,00");
     expect(body).toContain("Tavolo: 7");
     expect(body).toContain("Orario ordine: 14:00");
+  });
+
+  it("aggrega AYCE ripetuti e li stampa sia in pizzeria sia in cucina", () => {
+    const ayceItems = Array.from({ length: 6 }, (_, index) => ({
+      ...order.items![0],
+      id: `ayce-${index + 1}`,
+      menu_item_id: "ayce-adulti",
+      item_name_snapshot: "All You Can Eat · Adulti",
+      item_price_snapshot: 16.9,
+      quantity: 1,
+      line_total: 16.9,
+      preparation_area_snapshot: "pizzeria" as const,
+      category_name: "Formula All You Can Eat",
+      category_slug: "all-you-can-eat",
+      category_sort_order: 4,
+      notes: "",
+      extras: [],
+    }));
+    const body = buildRaw80mmDepartmentTicket(
+      { ...order, items: ayceItems },
+      "new_order",
+    ).toString("ascii");
+    const copies = body.split("\u001dVA\u0010").filter(Boolean);
+
+    expect(copies[0]).toContain("COPIA PIZZERIA");
+    expect(copies[0]).toContain("6 AYCE Adulti");
+    expect(copies[0].match(/AYCE Adulti/g)).toHaveLength(1);
+    expect(copies[1]).toContain("COPIA CUCINA");
+    expect(copies[1]).toContain("6 AYCE Adulti");
+    expect(copies[1].match(/AYCE Adulti/g)).toHaveLength(1);
+    expect(copies[2]).toContain("COPIA COMPLETA / CASSA");
+    expect(copies[2]).toContain("6 AYCE Adulti");
+    expect(body).not.toContain("All You Can Eat");
+    expect(body).not.toContain("?");
   });
 });

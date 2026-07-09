@@ -1,6 +1,14 @@
 import type { Order, OrderItem, PrintJobType } from "@/types/domain";
 import { getOrderLocationLabel } from "@/lib/order-display";
-import { groupOrderItemsByCategory } from "@/lib/order-items";
+import {
+  aggregatePreparationOrderItems,
+  groupOrderItemsByCategory,
+} from "@/lib/order-items";
+import {
+  formatPrintCategoryLabel,
+  formatPrintItemName,
+  isAyceItem,
+} from "@/lib/print-ticket-format";
 
 export const PRINT_JOB_LABELS: Record<PrintJobType, string> = {
   new_order: "NUOVA COMANDA",
@@ -56,11 +64,11 @@ export function getPinsaPrintPrefix(categorySlug: string | null | undefined) {
 }
 
 function isPizzaItem(item: OrderItem) {
-  return item.preparation_area_snapshot === "pizzeria";
+  return item.preparation_area_snapshot === "pizzeria" || isAyceItem(item);
 }
 
 function isKitchenItem(item: OrderItem) {
-  return item.preparation_area_snapshot === "cucina";
+  return item.preparation_area_snapshot === "cucina" || isAyceItem(item);
 }
 
 function orderTime(order: Order) {
@@ -128,9 +136,10 @@ function addPreparationLines(chunks: Buffer[], items: OrderItem[]) {
 
   for (const item of items) {
     const prefix = getPinsaPrintPrefix(item.category_slug);
+    const name = formatPrintItemName(item);
     const line = prefix
-      ? `${item.quantity}${prefix} ${item.item_name_snapshot}`
-      : `${item.quantity} ${item.item_name_snapshot}`;
+      ? `${item.quantity}${prefix} ${name}`
+      : `${item.quantity} ${name}`;
     for (const wrappedLine of wrap(line)) chunks.push(text(wrappedLine));
 
     for (const extra of item.extras ?? []) {
@@ -177,7 +186,7 @@ function buildDepartmentCopy(
 }
 
 export function buildRaw80mmDepartmentTicket(order: Order, jobType: PrintJobType) {
-  const items = order.items ?? [];
+  const items = aggregatePreparationOrderItems(order.items ?? []);
   const pizzaItems = items.filter(isPizzaItem);
   const kitchenItems = items.filter(isKitchenItem);
 
@@ -230,15 +239,15 @@ export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
   for (const category of groupOrderItemsByCategory(order.items ?? [])) {
     chunks.push(
       Buffer.from([0x1b, 0x61, 0x01]),
-      ...wrap(category.label.toUpperCase()).map(text),
+      ...wrap(formatPrintCategoryLabel(category.label).toUpperCase()).map(text),
       Buffer.from([0x1b, 0x61, 0x00]),
     );
 
     for (const item of category.items) {
       const prefix = getPinsaPrintPrefix(item.category_slug);
       const itemName = prefix
-        ? `${prefix} ${item.item_name_snapshot}`
-        : item.item_name_snapshot;
+        ? `${prefix} ${formatPrintItemName(item)}`
+        : formatPrintItemName(item);
       for (const line of wrap(`${item.quantity}x ${itemName}`)) {
         chunks.push(text(line));
       }
