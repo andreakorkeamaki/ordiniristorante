@@ -17,7 +17,7 @@ export function getInitialPrintDecision(
   now = Date.now(),
 ): WaiterInitialPrintDecision {
   if (profile.role !== "waiter") {
-    return ["draft", "pending_cashier"].includes(order.status)
+    return ["draft", "pending_cashier", "confirmed"].includes(order.status)
       ? "allowed"
       : "invalid-status";
   }

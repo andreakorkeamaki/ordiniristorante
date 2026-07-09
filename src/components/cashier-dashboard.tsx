@@ -566,6 +566,14 @@ export function CashierDashboard() {
                         Riprova stampa
                       </button>
                     </>
+                  ) : job?.status === "pending" ? (
+                    <button
+                      className="button-primary"
+                      disabled={!canWrite}
+                      onClick={() => void dispatchPrint(order, "new_order")}
+                    >
+                      Stampa
+                    </button>
                   ) : null
                 }
               />
