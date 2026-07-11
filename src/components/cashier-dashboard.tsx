@@ -640,13 +640,13 @@ export function CashierDashboard() {
                   <button
                     className="button-primary"
                     disabled={!canWrite || closingOrderId !== null}
-                    onClick={() => void prepareReceipt(order)}
+                    onClick={() => void closeTableAndPrint(order)}
                   >
                     {closingOrderId === order.id
-                      ? "Prepara scontrino…"
+                      ? "Stampa e chiude…"
                       : order.order_type === "takeaway"
-                        ? "Scontrino e chiudi asporto"
-                        : "Scontrino e chiudi tavolo"}
+                        ? "Chiudi asporto"
+                        : "Chiudi tavolo"}
                   </button>
                 </>
               }
@@ -997,36 +997,6 @@ export function CashierDashboard() {
 
   function openPreview(order: Order, type: PrintJobType) {
     setSelected({ order, type, jobId: jobFor(order.id, type)?.id });
-  }
-
-  async function prepareReceipt(order: Order) {
-    if (!canWrite || closingOrderId) return;
-    setClosingOrderId(order.id);
-    try {
-      const response = await fetch("/api/close-table", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "prepare", orderId: order.id }),
-      });
-      const payload = (await response.json()) as {
-        error?: string;
-        action?: string;
-        job?: PrintJob;
-      };
-      if (!response.ok || !payload.job) {
-        setMessage([payload.error, payload.action].filter(Boolean).join(" "));
-        return;
-      }
-      setReceiptPrintedManually(false);
-      setReceiptRetryAccepted(false);
-      setReceiptTarget({ order, job: payload.job });
-    } catch {
-      markUnreliable();
-      setMessage("Server non raggiungibile. Nessuna chiusura è stata eseguita.");
-    } finally {
-      setClosingOrderId(null);
-      await load();
-    }
   }
 
   async function loadMoreHistory() {
