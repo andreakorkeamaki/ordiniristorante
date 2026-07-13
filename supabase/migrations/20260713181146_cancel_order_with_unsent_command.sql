@@ -102,9 +102,16 @@ grant execute on function private.cancel_print_job(uuid, text) to authenticated;
 -- Repair initial commands that were safely cancelled before this transition
 -- became atomic. These are the cards shown as "NUOVA COMANDA - annullata"
 -- while their orders are still pending in the cashier dashboard.
+-- Migrations have no auth.uid(), so preserve the existing audit actor instead
+-- of letting orders_prepare replace updated_by with null.
+alter table public.orders disable trigger orders_prepare;
+
 update public.orders as target_order
 set status = 'cancelled',
-    closed_at = coalesce(target_order.closed_at, now())
+    closed_at = coalesce(target_order.closed_at, now()),
+    updated_at = now(),
+    version = target_order.version + 1,
+    updated_by = target_order.updated_by
 where target_order.status in ('pending_cashier', 'confirmed')
   and exists (
     select 1
@@ -127,5 +134,7 @@ where target_order.status in ('pending_cashier', 'confirmed')
         or delivered_job.submitted_at is not null
       )
   );
+
+alter table public.orders enable trigger orders_prepare;
 
 commit;
