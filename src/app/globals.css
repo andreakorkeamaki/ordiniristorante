@@ -2395,6 +2395,42 @@ code {
   gap: 0.25rem;
 }
 
+.category-row-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.category-edit-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.65rem;
+  width: 100%;
+}
+
+.category-edit-fields {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.category-edit-fields label {
+  display: grid;
+  gap: 0.2rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 750;
+}
+
+.category-edit-fields input {
+  min-width: 0;
+  width: 100%;
+}
+
+.category-edit-actions {
+  flex-direction: column;
+}
+
 .product-create {
   display: grid;
   grid-template-columns: 1fr 1.5fr 0.7fr 0.9fr auto;
@@ -3060,6 +3096,15 @@ code {
   .product-create {
     display: grid;
     grid-template-columns: 1fr;
+  }
+
+  .category-edit-form {
+    grid-template-columns: 1fr;
+  }
+
+  .category-edit-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
   }
 
   .product-admin-row {

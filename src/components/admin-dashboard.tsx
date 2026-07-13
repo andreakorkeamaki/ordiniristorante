@@ -8,6 +8,7 @@ import {
   reorderCategoryMenuItems,
   type DropPlacement,
 } from "@/lib/menu-ordering";
+import { normalizeCategorySlug } from "@/lib/menu-categories";
 import { createClient } from "@/lib/supabase/client";
 import type {
   MenuCategory,
@@ -43,6 +44,7 @@ export function AdminDashboard() {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [saving, setSaving] = useState(false);
   const [testPrinting, setTestPrinting] = useState(false);
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [draggedProduct, setDraggedProduct] = useState<{
     categoryId: string;
@@ -173,14 +175,63 @@ export function AdminDashboard() {
             <div className="admin-list">
               {categories.map((category, index) => (
                 <article className="admin-row" key={category.id}>
-                  <div><strong>{category.name}</strong><small>/{category.slug}</small></div>
-                  <div className="row-actions">
-                    <button disabled={index === 0} onClick={() => void moveCategory(category, -1)}>↑</button>
-                    <button disabled={index === categories.length - 1} onClick={() => void moveCategory(category, 1)}>↓</button>
-                    <button onClick={() => void toggle("menu_categories", category.id, "active", !category.active)}>
-                      {category.active ? "Attiva" : "Spenta"}
-                    </button>
-                  </div>
+                  {editingCategoryId === category.id ? (
+                    <form
+                      className="category-edit-form"
+                      onSubmit={(event) => void saveCategory(event, category)}
+                    >
+                      <div className="category-edit-fields">
+                        <label>
+                          <span>Nome visibile</span>
+                          <input
+                            autoFocus
+                            name="name"
+                            defaultValue={category.name}
+                            maxLength={120}
+                            required
+                          />
+                        </label>
+                        <label>
+                          <span>Slug interno</span>
+                          <input
+                            name="slug"
+                            defaultValue={category.slug}
+                            maxLength={120}
+                            required
+                          />
+                        </label>
+                        <small>
+                          Lo slug può influenzare colori, stampa e regole speciali.
+                        </small>
+                      </div>
+                      <div className="row-actions category-edit-actions">
+                        <button type="submit">Salva</button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingCategoryId(null)}
+                        >
+                          Annulla
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <>
+                      <div><strong>{category.name}</strong><small>/{category.slug}</small></div>
+                      <div className="row-actions category-row-actions">
+                        <button type="button" disabled={index === 0} onClick={() => void moveCategory(category, -1)}>↑</button>
+                        <button type="button" disabled={index === categories.length - 1} onClick={() => void moveCategory(category, 1)}>↓</button>
+                        <button type="button" onClick={() => void toggle("menu_categories", category.id, "active", !category.active)}>
+                          {category.active ? "Attiva" : "Spenta"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingCategoryId(category.id)}
+                        >
+                          Modifica
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </article>
               ))}
             </div>
@@ -412,7 +463,7 @@ export function AdminDashboard() {
         text: blockReason ?? "Connessione non verificata. Modifica non eseguita.",
         type: "error",
       });
-      return;
+      return false;
     }
     setSaving(true);
     try {
@@ -428,6 +479,7 @@ export function AdminDashboard() {
         type: error ? "error" : "success",
       });
       if (!error) await load();
+      return !error;
     } finally {
       setSaving(false);
     }
@@ -437,12 +489,62 @@ export function AdminDashboard() {
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
-    await execute(() => createClient().from("menu_categories").insert({
-      name: String(data.get("name")),
-      slug: String(data.get("slug")),
+    const name = String(data.get("name")).trim();
+    const slug = normalizeCategorySlug(String(data.get("slug")));
+    if (!name || !slug) {
+      setFeedback({
+        text: "Nome e slug della categoria sono obbligatori",
+        type: "error",
+      });
+      return;
+    }
+    const saved = await execute(() => createClient().from("menu_categories").insert({
+      name,
+      slug,
       sort_order: categories.length,
     }));
-    form.reset();
+    if (saved) form.reset();
+  }
+
+  async function saveCategory(
+    event: React.FormEvent<HTMLFormElement>,
+    category: MenuCategory,
+  ) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const name = String(data.get("name")).trim();
+    const slug = normalizeCategorySlug(String(data.get("slug")));
+    if (!name || !slug) {
+      setFeedback({
+        text: "Nome e slug della categoria sono obbligatori",
+        type: "error",
+      });
+      return;
+    }
+    if (
+      slug !== category.slug &&
+      !window.confirm(
+        "Lo slug è usato da colori, stampa e regole speciali. Confermi la modifica?",
+      )
+    ) {
+      return;
+    }
+
+    const saved = await execute(async () => {
+      const result = await createClient()
+        .from("menu_categories")
+        .update({
+          name,
+          name_en: name === category.name ? category.name_en : null,
+          slug,
+        })
+        .eq("id", category.id);
+      if (result.error?.code === "23505") {
+        return { error: { message: "Questo slug è già usato da un’altra categoria" } };
+      }
+      return result;
+    });
+    if (saved) setEditingCategoryId(null);
   }
 
   async function createProduct(event: React.FormEvent<HTMLFormElement>) {
