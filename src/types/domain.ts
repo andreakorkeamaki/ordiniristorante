@@ -188,6 +188,8 @@ export interface PrintJob {
   retry_requested_by: string | null;
   retry_requested_at: string | null;
   retry_reason: string | null;
+  dispatch_token: string | null;
+  dispatch_expires_at: string | null;
   created_at: string;
   updated_at: string;
   printed_at: string | null;

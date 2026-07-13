@@ -47,13 +47,17 @@ Nel file `.env.local` inserire:
 ```dotenv
 NEXT_PUBLIC_SUPABASE_URL=https://lnckmyfillppaachcluz.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+SUPABASE_SECRET_KEY=sb_secret_...
 NEXT_PUBLIC_MENU_ORIGIN=https://menu.example.it
 NEXT_PUBLIC_APP_ORIGIN=https://ordini.example.it
 PRINTNODE_API_KEY=printnode_server_only_api_key
 PRINTNODE_PRINTER_ID=123456
 ```
 
-La publishable key è progettata per il client ed è protetta da RLS. Non aggiungere mai secret key o `service_role` a variabili `NEXT_PUBLIC_*`.
+La publishable key è progettata per il client ed è protetta da RLS. La
+`SUPABASE_SECRET_KEY` è usata soltanto dalle route server per registrare gli
+esiti verificati con PrintNode. Non aggiungere mai secret key o `service_role`
+a variabili `NEXT_PUBLIC_*`.
 Anche `PRINTNODE_API_KEY` e `PRINTNODE_PRINTER_ID` sono variabili esclusivamente
 server-side: non devono avere il prefisso `NEXT_PUBLIC_`.
 
@@ -209,15 +213,22 @@ I test database pgTAP sono in `supabase/tests`.
 
 1. importare la repository in Vercel;
 2. configurare `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`,
-   `PRINTNODE_API_KEY` e `PRINTNODE_PRINTER_ID`;
+   `SUPABASE_SECRET_KEY`, `PRINTNODE_API_KEY` e `PRINTNODE_PRINTER_ID`;
 3. collegare allo stesso progetto i sottodomini menu e applicazione;
 4. configurare `NEXT_PUBLIC_MENU_ORIGIN` e `NEXT_PUBLIC_APP_ORIGIN`;
 5. impostare in Supabase **Authentication → URL Configuration** il sottodominio applicazione;
 6. aggiungere il sottodominio applicazione agli URL di redirect consentiti;
 7. distribuire con il preset Next.js.
 
-Non è necessaria una Supabase secret key su Vercel: l’endpoint usa la sessione
-autenticata della cassa e le policy RLS.
+La secret key Supabase deve restare server-side. La sessione dell’operatore
+continua a governare autorizzazioni e richieste; la secret key attesta soltanto
+claim, invio e riconciliazione dei job PrintNode dopo i controlli della route.
+
+Le migration che cambiano le RPC di stampa e il relativo deploy applicativo
+devono essere promossi insieme, in assenza di job `printing`: prima si configura
+la secret key, quindi si applica la migration e si promuove immediatamente il
+build corrispondente. Versioni applicative e firme RPC non allineate bloccano
+intenzionalmente l’invio alla stampante.
 
 ## App precedente
 

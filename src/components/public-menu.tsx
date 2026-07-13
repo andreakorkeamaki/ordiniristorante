@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { DEFAULT_SETTINGS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/format";
@@ -20,8 +20,10 @@ export function PublicMenu() {
   const [language, setLanguage] = useState<"it" | "en">("it");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const loadGeneration = useRef(0);
 
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     const supabase = createClient();
     const [settings, categories, items, extras] = await Promise.all([
       supabase.from("restaurant_settings").select("*").single(),
@@ -50,6 +52,7 @@ export function PublicMenu() {
     ]);
 
     const firstError = settings.error ?? categories.error ?? items.error ?? extras.error;
+    if (generation !== loadGeneration.current) return;
     if (firstError) {
       setError(true);
       setLoading(false);
@@ -78,6 +81,7 @@ export function PublicMenu() {
       .subscribe();
 
     return () => {
+      loadGeneration.current += 1;
       void supabase.removeChannel(channel);
     };
   }, [load]);

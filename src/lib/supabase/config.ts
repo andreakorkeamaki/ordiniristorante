@@ -27,3 +27,18 @@ export function getSupabaseEnv() {
 
   return { url, key };
 }
+
+export function getSupabaseServerSecretEnv() {
+  const { url } = getSupabaseEnv();
+  const key =
+    process.env.SUPABASE_SECRET_KEY ??
+    process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!key) {
+    throw new Error(
+      "Supabase server secret non configurata. Imposta SUPABASE_SECRET_KEY nel runtime server.",
+    );
+  }
+
+  return { url, key };
+}

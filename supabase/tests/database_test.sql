@@ -1,5 +1,5 @@
 begin;
-select plan(145);
+select plan(161);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -52,7 +52,7 @@ select has_function(
 select has_function(
   'public',
   'claim_print_job',
-  array['uuid'],
+  array['uuid', 'uuid', 'uuid'],
   'print jobs have an atomic claim RPC'
 );
 select has_function(
@@ -137,6 +137,62 @@ select has_column('public', 'print_jobs', 'verification_required_at', 'uncertain
 select has_column('public', 'print_jobs', 'last_printnode_state', 'the latest PrintNode state is persisted');
 select has_column('public', 'print_jobs', 'retry_of_job_id', 'retry attempts keep their parent job');
 select has_column('public', 'print_jobs', 'attempt_number', 'retry attempts are numbered');
+select has_column('public', 'print_jobs', 'dispatch_token', 'print dispatch has a server lease token');
+select has_column('public', 'print_jobs', 'dispatch_expires_at', 'print dispatch leases expire');
+select ok(
+  not has_function_privilege(
+    'authenticated',
+    'public.record_printnode_state(uuid,text,text,uuid)',
+    'EXECUTE'
+  ),
+  'browser sessions cannot attest PrintNode state'
+);
+select ok(
+  has_function_privilege(
+    'service_role',
+    'public.record_printnode_state(uuid,text,text,uuid)',
+    'EXECUTE'
+  ),
+  'the server role can attest verified PrintNode state'
+);
+select ok(
+  not has_function_privilege(
+    'authenticated',
+    'public.mark_print_job_delivered(uuid)',
+    'EXECUTE'
+  ),
+  'legacy delivery confirmation is no longer callable'
+);
+select ok(
+  not has_function_privilege(
+    'authenticated',
+    'public.mark_printed(uuid)',
+    'EXECUTE'
+  ),
+  'legacy order-level print completion is no longer callable'
+);
+select ok(
+  not coalesce(
+    (
+      select prosecdef
+      from pg_catalog.pg_proc
+      where oid = 'public.confirm_print_job_manual(uuid,text)'::regprocedure
+    ),
+    true
+  ),
+  'the exposed manual confirmation RPC is a security-invoker wrapper'
+);
+select ok(
+  coalesce(
+    (
+      select prosecdef
+      from pg_catalog.pg_proc
+      where oid = 'private.confirm_print_job_manual(uuid,text)'::regprocedure
+    ),
+    false
+  ),
+  'the privileged manual confirmation implementation stays in the private schema'
+);
 select fk_ok(
   'public',
   'orders',
@@ -178,11 +234,9 @@ select policies_are(
   'print_jobs',
   array[
     'print_jobs_cashier_insert',
-    'print_jobs_cashier_update',
-    'print_jobs_staff_select',
-    'print_jobs_waiter_automatic_update'
+    'print_jobs_staff_select'
   ],
-  'print job policies keep waiter printing separate from cashier controls'
+  'print job policies keep state transitions behind audited RPCs'
 );
 select function_returns('public', 'send_order_to_cashier', array['uuid'], 'orders', 'send RPC returns order');
 select function_returns('public', 'change_order_item_quantity', array['uuid', 'integer'], 'order_items', 'quantity RPC returns item');
@@ -455,9 +509,53 @@ select is(
   'takeaway command jobs keep the three-sheet invariant'
 );
 
+select throws_ok(
+  $$
+    select public.create_takeaway_order(
+      'Asporto giorno errato',
+      now() + interval '1 day'
+    )
+  $$,
+  'P0001',
+  'L''orario di ritiro deve appartenere al servizio di oggi',
+  'a takeaway cannot be attached to a different business day'
+);
+
 update public.profiles
 set role = 'waiter'
 where id = '00000000-0000-4000-9000-000000009901';
+
+set local role authenticated;
+
+select is(
+  (
+    select count(*)::integer from public.orders where order_type = 'takeaway'
+  ),
+  0,
+  'a waiter cannot read takeaway orders through RLS'
+);
+select is_empty(
+  $$
+    update public.order_items
+    set quantity = quantity + 1
+    where order_id = (
+      select id from public.orders where takeaway_name = 'Giulia Test'
+    )
+    returning id
+  $$,
+  'a waiter cannot mutate takeaway items through RLS'
+);
+select is(
+  (
+    select count(*)::integer
+    from public.order_activity
+    where payload ->> 'customer_name' = 'Giulia Test'
+  ),
+  0,
+  'a waiter cannot read takeaway customer data through activity history'
+);
+
+reset role;
 
 insert into public.orders (id, table_id, service_id)
 values
@@ -697,7 +795,7 @@ select is(
 
 set local role authenticated;
 
-select results_eq(
+select is_empty(
   $$
     update public.print_jobs
     set status = 'printing',
@@ -711,10 +809,9 @@ select results_eq(
       and status = 'pending'
     returning status::text
   $$,
-  $$values ('printing')$$,
-  'a waiter can start the automatic print state flow'
+  'a waiter cannot directly start the automatic print state flow'
 );
-select lives_ok(
+select throws_ok(
   $$
     select public.record_printnode_state(
       (
@@ -724,32 +821,16 @@ select lives_ok(
           and job_type = 'new_order'
       ),
       'done',
-      null
+      null,
+      '00000000-0000-4000-9000-000000009901'
     )
   $$,
-  'a waiter can record PrintNode completion for their own order'
-);
-select is(
-  (
-    select status::text
-    from public.print_jobs
-    where order_id = '00000000-0000-4000-9000-000000009923'
-      and job_type = 'new_order'
-  ),
-  'printed',
-  'waiter PrintNode completion marks the print job printed'
-);
-select is(
-  (
-    select status::text
-    from public.orders
-    where id = '00000000-0000-4000-9000-000000009923'
-  ),
-  'in_preparation',
-  'waiter PrintNode completion moves the order to preparation'
+  '42501',
+  null,
+  'a waiter cannot forge PrintNode completion'
 );
 
-select results_eq(
+select is_empty(
   $$
     update public.print_jobs
     set status = 'printing',
@@ -761,24 +842,99 @@ select results_eq(
       and status = 'pending'
     returning status::text
   $$,
-  $$values ('printing')$$,
-  'a waiter can claim the initial print job for their own order'
-);
-select results_eq(
-  $$
-    update public.print_jobs
-    set printnode_job_id = 990001,
-        submitted_at = now()
-    where order_id = '00000000-0000-4000-9000-000000009921'
-      and job_type = 'new_order'
-      and status = 'printing'
-    returning printnode_job_id
-  $$,
-  $$values (990001::bigint)$$,
-  'a waiter can persist the PrintNode submission for their own print job'
+  'a waiter cannot claim the initial print job directly'
 );
 
 reset role;
+set local "request.jwt.claims" =
+  '{"sub":"00000000-0000-4000-9000-000000009901","role":"service_role"}';
+set local role service_role;
+
+select lives_ok(
+  $$
+    select public.claim_print_job(
+      (
+        select id from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009923'
+          and job_type = 'new_order'
+      ),
+      '00000000-0000-4000-9000-000000009951',
+      '00000000-0000-4000-9000-000000009901'
+    )
+  $$,
+  'the server claims a print job with a lease'
+);
+select lives_ok(
+  $$
+    select public.record_printnode_submission(
+      (
+        select id from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009923'
+          and job_type = 'new_order'
+      ),
+      990003,
+      '00000000-0000-4000-9000-000000009951',
+      '00000000-0000-4000-9000-000000009901'
+    )
+  $$,
+  'the server records the PrintNode submission with the same lease'
+);
+select lives_ok(
+  $$
+    select public.record_printnode_state(
+      (
+        select id from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009923'
+          and job_type = 'new_order'
+      ),
+      'done',
+      null,
+      '00000000-0000-4000-9000-000000009901'
+    )
+  $$,
+  'the server records verified PrintNode completion'
+);
+select is(
+  (
+    select status::text from public.orders
+    where id = '00000000-0000-4000-9000-000000009923'
+  ),
+  'in_preparation',
+  'verified PrintNode completion moves the order to preparation'
+);
+select lives_ok(
+  $$
+    select public.claim_print_job(
+      (
+        select id from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009921'
+          and job_type = 'new_order'
+      ),
+      '00000000-0000-4000-9000-000000009952',
+      '00000000-0000-4000-9000-000000009901'
+    )
+  $$,
+  'the server claims the other initial print job'
+);
+select lives_ok(
+  $$
+    select public.record_printnode_submission(
+      (
+        select id from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009921'
+          and job_type = 'new_order'
+      ),
+      990001,
+      '00000000-0000-4000-9000-000000009952',
+      '00000000-0000-4000-9000-000000009901'
+    )
+  $$,
+  'the server persists the second PrintNode submission'
+);
+
+reset role;
+set local "request.jwt.claims" =
+  '{"sub":"00000000-0000-4000-9000-000000009901","role":"authenticated"}';
 
 select lives_ok(
   $$select public.send_order_to_cashier('00000000-0000-4000-9000-000000009922')$$,
@@ -796,13 +952,14 @@ where id = '00000000-0000-4000-9000-000000009901';
 
 select lives_ok(
   $$
-    select public.mark_print_job_manual(
+    select public.confirm_print_job_manual(
       (
         select id
         from public.print_jobs
         where order_id = '00000000-0000-4000-9000-000000009921'
           and job_type = 'new_order'
-      )
+      ),
+      'Stampa fisica verificata manualmente dalla cassa nel test'
     )
   $$,
   'the cashier can complete the initial print'
@@ -856,7 +1013,7 @@ select is(
 
 set local role authenticated;
 
-select results_eq(
+select is_empty(
   $$
     update public.print_jobs
     set status = 'printing',
@@ -868,8 +1025,7 @@ select results_eq(
       and status = 'pending'
     returning status::text
   $$,
-  $$values ('printing')$$,
-  'a waiter can claim an update print job for their own order'
+  'a waiter cannot directly claim an update print job'
 );
 
 reset role;
@@ -975,7 +1131,7 @@ select is(
 
 select lives_ok(
   $$
-    select public.mark_print_job_manual(
+    select public.confirm_print_job_manual(
       (
         select id
         from public.print_jobs
@@ -983,7 +1139,8 @@ select lives_ok(
           and job_type = 'order_update'
         order by created_at desc
         limit 1
-      )
+      ),
+      'Aggiornamento stampato e verificato manualmente nel test'
     )
   $$,
   'the cashier can complete an update print'
@@ -1061,7 +1218,7 @@ select is(
   1,
   'only one table reprint exists for the repeated action'
 );
-select results_eq(
+select is_empty(
   $$
     update public.print_jobs
     set status = 'printing'
@@ -1070,8 +1227,7 @@ select results_eq(
       and status = 'pending'
     returning status::text
   $$,
-  $$values ('printing')$$,
-  'a waiter can claim the table reprint they requested'
+  'a waiter cannot directly claim the table reprint they requested'
 );
 
 reset role;
@@ -1161,13 +1317,14 @@ select throws_ok(
 );
 select lives_ok(
   $$
-    select public.mark_print_job_manual(
+    select public.confirm_print_job_manual(
       (
         select id
         from public.print_jobs
         where idempotency_key =
           '00000000-0000-4000-9000-000000009922:reprint:service-close-blocker'
-      )
+      ),
+      'Ristampa fisica verificata manualmente prima della chiusura servizio'
     )
   $$,
   'the printing job is explicitly resolved before service closure'
@@ -1207,30 +1364,48 @@ select is(
   1,
   'receipt records exactly one copy'
 );
+
+set local "request.jwt.claims" =
+  '{"sub":"00000000-0000-4000-9000-000000009901","role":"service_role"}';
+set local role service_role;
+
 select is(
   (
-    select public.claim_print_job((
-      select id
-      from public.print_jobs
-      where order_id = '00000000-0000-4000-9000-000000009922'
-        and job_type = 'receipt'
-    )) -> 'job' ->> 'status'
+    select public.claim_print_job(
+      (
+        select id
+        from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009922'
+          and job_type = 'receipt'
+      ),
+      '00000000-0000-4000-9000-000000009961',
+      '00000000-0000-4000-9000-000000009901'
+    ) -> 'job' ->> 'status'
   ),
   'printing',
   'the first receipt claim starts printing'
 );
 select is(
   (
-    select (public.claim_print_job((
-      select id
-      from public.print_jobs
-      where order_id = '00000000-0000-4000-9000-000000009922'
-        and job_type = 'receipt'
-    )) ->> 'claimed')::boolean
+    select (public.claim_print_job(
+      (
+        select id
+        from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009922'
+          and job_type = 'receipt'
+      ),
+      '00000000-0000-4000-9000-000000009962',
+      '00000000-0000-4000-9000-000000009901'
+    ) ->> 'claimed')::boolean
   ),
   false,
   'a concurrent second claim is explicitly rejected'
 );
+
+reset role;
+set local "request.jwt.claims" =
+  '{"sub":"00000000-0000-4000-9000-000000009901","role":"authenticated"}';
+
 select throws_ok(
   $$select public.cancel_order('00000000-0000-4000-9000-000000009922')$$,
   'P0001',
@@ -1295,33 +1470,63 @@ select lives_ok(
   $$,
   'a confirmed order with printed command can prepare a receipt'
 );
+
+set local "request.jwt.claims" =
+  '{"sub":"00000000-0000-4000-9000-000000009901","role":"service_role"}';
+set local role service_role;
+
 select is(
   (
-    select public.claim_print_job((
-      select id
-      from public.print_jobs
-      where order_id = '00000000-0000-4000-9000-000000009922'
-        and job_type = 'receipt'
-    )) -> 'job' ->> 'status'
-  ),
-  'printing',
-  'a confirmed order with printed command can claim the receipt'
-);
-select lives_ok(
-  $$
-    select public.confirm_receipt_manual_and_close(
+    select public.claim_print_job(
       (
         select id
         from public.print_jobs
         where order_id = '00000000-0000-4000-9000-000000009922'
           and job_type = 'receipt'
       ),
-      (select version from public.orders where id = '00000000-0000-4000-9000-000000009922'),
-      'Scontrino stampato manualmente da ordine confermato'
+      '00000000-0000-4000-9000-000000009963',
+      '00000000-0000-4000-9000-000000009901'
+    ) -> 'job' ->> 'status'
+  ),
+  'printing',
+  'a confirmed order with printed command can claim the receipt'
+);
+select lives_ok(
+  $$
+    select public.record_printnode_submission(
+      (
+        select id
+        from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009922'
+          and job_type = 'receipt'
+      ),
+      990004,
+      '00000000-0000-4000-9000-000000009963',
+      '00000000-0000-4000-9000-000000009901'
     )
   $$,
-  'manual receipt confirmation closes a confirmed order whose command was printed'
+  'the server persists the verified receipt submission'
 );
+select lives_ok(
+  $$
+    select public.record_printnode_state(
+      (
+        select id
+        from public.print_jobs
+        where order_id = '00000000-0000-4000-9000-000000009922'
+          and job_type = 'receipt'
+      ),
+      'done',
+      null,
+      '00000000-0000-4000-9000-000000009901'
+    )
+  $$,
+  'verified PrintNode receipt completion is recorded by the server'
+);
+
+reset role;
+set local "request.jwt.claims" =
+  '{"sub":"00000000-0000-4000-9000-000000009901","role":"authenticated"}';
 select is(
   (
     select status::text
@@ -1329,7 +1534,7 @@ select is(
     where id = '00000000-0000-4000-9000-000000009922'
   ),
   'closed',
-  'confirmed printed order is closed by receipt confirmation'
+  'verified receipt completion closes the confirmed order automatically'
 );
 
 rollback to savepoint receipt_confirmed_printed_order_close_tests;

@@ -39,6 +39,8 @@ const baseJob: PrintJob = {
   retry_requested_by: null,
   retry_requested_at: null,
   retry_reason: null,
+  dispatch_token: null,
+  dispatch_expires_at: null,
   created_at: "2026-07-02T10:00:00.000Z",
   updated_at: "2026-07-02T10:00:00.000Z",
   printed_at: null,

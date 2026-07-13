@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentProfile } from "@/lib/auth";
@@ -18,6 +19,7 @@ import {
   buildRaw80mmTicket,
   PRINT_JOB_LABELS,
 } from "@/lib/print-ticket-raw";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
@@ -60,6 +62,16 @@ type BasicOrder = Pick<
   "id" | "created_by" | "status" | "sent_to_cashier_at" | "table_id"
 >;
 
+class PrintPreparationError extends Error {
+  constructor(
+    readonly reason: "database_unreachable" | "invalid_data" | "dispatch_invalidated",
+    message: string,
+  ) {
+    super(message);
+    this.name = "PrintPreparationError";
+  }
+}
+
 async function requireCashier() {
   const profile = await getCurrentProfile();
   if (!profile?.active || !["cashier", "admin"].includes(profile.role)) {
@@ -84,19 +96,27 @@ export async function GET() {
     return NextResponse.json({ error: "Supabase non configurato" }, { status: 503 });
   }
 
+  const admin = getPrintAdminClient();
+  if (!admin) {
+    return NextResponse.json(
+      { error: "Stampa server non configurata" },
+      { status: 503 },
+    );
+  }
+
   const availability = await getPrinterAvailability();
   let reconciled = 0;
 
   if (availability.configured) {
     const unresolvedJobs = await loadAllUnresolvedPrintJobs(supabase);
 
-    reconciled = await reconcilePrintJobs(
-      supabase,
-      unresolvedJobs,
-    );
+    reconciled = await reconcilePrintJobs(admin, unresolvedJobs, profile.id);
   }
 
-  await supabase.rpc("flag_stale_print_jobs", { p_minutes: 2 });
+  await admin.rpc("flag_stale_print_jobs", {
+    p_minutes: 2,
+    p_actor_id: profile.id,
+  });
 
   logPrintEvent("print_queue_reconciled", {
     actor_id: profile.id,
@@ -124,6 +144,14 @@ export async function POST(request: Request) {
   const supabase = await createClient();
   if (!supabase) {
     return NextResponse.json({ error: "Supabase non configurato" }, { status: 503 });
+  }
+
+  const admin = getPrintAdminClient();
+  if (!admin) {
+    return NextResponse.json(
+      { error: "Stampa server non configurata" },
+      { status: 503 },
+    );
   }
 
   const input = parsed.data;
@@ -172,7 +200,7 @@ export async function POST(request: Request) {
   };
 
   if (job.printnode_job_id) {
-    const reconciled = await reconcilePrintJob(supabase, job);
+    const reconciled = await reconcilePrintJob(admin, job, profile.id);
     job = reconciled ?? job;
     logPrintEvent("print_dispatch_reused_existing_submission", {
       ...context,
@@ -201,9 +229,9 @@ export async function POST(request: Request) {
   }
 
   if (job.status === "printing") {
-    const recovered = await recoverSubmissionBySource(supabase, job);
+    const recovered = await recoverSubmissionBySource(admin, job, profile.id);
     if (recovered) {
-      job = (await reconcilePrintJob(supabase, recovered)) ?? recovered;
+      job = (await reconcilePrintJob(admin, recovered, profile.id)) ?? recovered;
       return NextResponse.json({
         job,
         idempotent: true,
@@ -214,10 +242,12 @@ export async function POST(request: Request) {
     }
 
     await markJobUncertain(
-      supabase,
+      admin,
       job.id,
+      job.dispatch_token,
       "Invio già avviato: verificare la stampante prima di ristampare",
       "Job in stato printing senza printnode_job_id recuperabile",
+      profile.id,
     );
     return NextResponse.json(
       {
@@ -252,30 +282,21 @@ export async function POST(request: Request) {
     );
   }
 
-  const now = new Date().toISOString();
-  const { data: claimedJob, error: claimError } = await supabase
-    .from("print_jobs")
-    .update({
-      status: "printing",
-      processing_started_at: now,
-      last_attempt_at: now,
-      retry_count: job.retry_count + 1,
-      failed_at: null,
-      error_message: null,
-      staff_message: null,
-      technical_error: null,
-      verification_required_at: null,
-      manual_fallback: false,
-    })
-    .eq("id", job.id)
-    .eq("status", "pending")
-    .select("*")
-    .maybeSingle();
+  const dispatchToken = randomUUID();
+  const { data: claimData, error: claimError } = await admin.rpc(
+    "claim_print_job",
+    {
+      p_job_id: job.id,
+      p_dispatch_token: dispatchToken,
+      p_actor_id: profile.id,
+    },
+  );
 
   if (claimError) {
     return NextResponse.json({ error: "Impossibile avviare il job di stampa" }, { status: 400 });
   }
-  if (!claimedJob) {
+  const claimResult = claimData as { job: PrintJob; claimed: boolean } | null;
+  if (!claimResult?.claimed) {
     const current = await loadPrintJob(supabase, job.id);
     return NextResponse.json({
       job: current ?? job,
@@ -284,20 +305,22 @@ export async function POST(request: Request) {
       orderAccepted: true,
     });
   }
-  job = claimedJob as PrintJob;
+  job = claimResult.job;
 
   try {
-    if (input.type === "cancellation" && !job.retry_of_job_id) {
-      await cancelEarlierPrintNodeJobs(supabase, input.orderId);
+    const orderResult = await loadOrderForPrint(supabase, input.orderId);
+    if (!orderResult.ok) {
+      throw new PrintPreparationError(
+        orderResult.reason === "database_error"
+          ? "database_unreachable"
+          : "invalid_data",
+        orderResult.technicalMessage,
+      );
     }
-
-    const availability = await getPrinterAvailability();
-    if (!availability.available) throw new Error(availability.message);
-
-    const order = await loadOrderForPrint(supabase, input.orderId);
-    if (!order) throw new Error("Ordine non disponibile");
+    const order = orderResult.order;
     if (job.copies !== 3) {
-      throw new Error(
+      throw new PrintPreparationError(
+        "invalid_data",
         `Metadati copie non validi per la comanda: attese 3, trovate ${job.copies}`,
       );
     }
@@ -309,6 +332,25 @@ export async function POST(request: Request) {
         ? buildRaw80mmDepartmentTicket(order, ticketType)
         : buildRaw80mmTicket(order, ticketType);
     const printNodeCopies = printMode === "department_split" ? 1 : job.copies;
+
+    if (input.type === "cancellation" && !job.retry_of_job_id) {
+      await cancelEarlierPrintNodeJobs(supabase, input.orderId);
+    }
+
+    const availability = await getPrinterAvailability();
+    if (!availability.available) throw new Error(availability.message);
+
+    const { data: dispatchable, error: dispatchError } = await admin.rpc(
+      "verify_print_job_dispatch",
+      { p_job_id: job.id, p_dispatch_token: dispatchToken },
+    );
+    if (dispatchError || dispatchable !== true) {
+      throw new PrintPreparationError(
+        "dispatch_invalidated",
+        dispatchError?.message ?? "Ordine annullato o servizio chiuso prima dell'invio",
+      );
+    }
+
     const source = printNodeSource(job.id);
     const submission = await createPrintNodeJob({
       title: `${PRINT_JOB_LABELS[ticketType]} #${order.order_number}`,
@@ -328,13 +370,21 @@ export async function POST(request: Request) {
       sent_at: new Date().toISOString(),
     });
 
-    const savedJob = await recordSubmissionWithRetry(supabase, job.id, submission.id);
+    const savedJob = await recordSubmissionWithRetry(
+      admin,
+      job.id,
+      submission.id,
+      dispatchToken,
+      profile.id,
+    );
     if (!savedJob) {
       await markJobUncertain(
-        supabase,
+        admin,
         job.id,
+        dispatchToken,
         "PrintNode ha accettato la stampa, ma lo stato locale non è stato aggiornato",
         `PrintNode job ${submission.id} accettato; update database fallito`,
+        profile.id,
       );
       logPrintEvent("printnode_submission_database_update_failed", {
         ...context,
@@ -353,7 +403,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const reconciled = await reconcilePrintJob(supabase, savedJob);
+    const reconciled = await reconcilePrintJob(admin, savedJob, profile.id);
     return NextResponse.json({
       job: reconciled ?? savedJob,
       printer: availability.printer,
@@ -364,15 +414,78 @@ export async function POST(request: Request) {
   } catch (error) {
     const technicalMessage =
       error instanceof Error ? error.message : "Invio a PrintNode fallito";
+
+    if (error instanceof PrintPreparationError) {
+      if (error.reason === "database_unreachable") {
+        await releasePrintJob(
+          admin,
+          job.id,
+          dispatchToken,
+          "Dati comanda temporaneamente non disponibili",
+          technicalMessage,
+          profile.id,
+        );
+        return NextResponse.json(
+          {
+            error: "Supabase non raggiungibile. La stampa non è stata inviata e resta in coda.",
+            jobId: job.id,
+            orderAccepted: true,
+            outcome: "database_unreachable",
+          },
+          { status: 503 },
+        );
+      }
+
+      if (error.reason === "dispatch_invalidated") {
+        await releasePrintJob(
+          admin,
+          job.id,
+          dispatchToken,
+          "Invio annullato perché ordine o servizio sono cambiati",
+          technicalMessage,
+          profile.id,
+        );
+        return NextResponse.json(
+          {
+            error: "La stampa non è stata inviata perché l’ordine o il servizio sono cambiati.",
+            jobId: job.id,
+            orderAccepted: true,
+            outcome: "dispatch_invalidated",
+          },
+          { status: 409 },
+        );
+      }
+
+      await failPrintJob(
+        admin,
+        job.id,
+        dispatchToken,
+        "Dati della comanda non validi per la stampa",
+        technicalMessage,
+        profile.id,
+      );
+      return NextResponse.json(
+        {
+          error: "La comanda contiene dati incompleti e non è stata inviata alla stampante.",
+          jobId: job.id,
+          orderAccepted: true,
+          outcome: "invalid_print_data",
+        },
+        { status: 409 },
+      );
+    }
+
     const outcomeUncertain =
       error instanceof PrintNodeSubmissionError && error.outcomeUncertain;
 
     if (outcomeUncertain) {
       await markJobUncertain(
-        supabase,
+        admin,
         job.id,
+        dispatchToken,
         "PrintNode ha già ricevuto o potrebbe aver ricevuto la richiesta: verificare il foglio",
         technicalMessage,
+        profile.id,
       );
       logPrintEvent("printnode_submission_uncertain", {
         ...context,
@@ -390,16 +503,14 @@ export async function POST(request: Request) {
       );
     }
 
-    await supabase
-      .from("print_jobs")
-      .update({
-        status: "failed",
-        staff_message: "Invio alla stampante non riuscito",
-        technical_error: technicalMessage,
-        error_message: technicalMessage,
-        failed_at: new Date().toISOString(),
-      })
-      .eq("id", job.id);
+    await failPrintJob(
+      admin,
+      job.id,
+      dispatchToken,
+      "Invio alla stampante non riuscito",
+      technicalMessage,
+      profile.id,
+    );
 
     logPrintEvent("printnode_submission_failed", {
       ...context,
@@ -532,7 +643,11 @@ async function getOrCreatePrintJob(
   return { job: data as PrintJob };
 }
 
-async function reconcilePrintJob(supabase: SupabaseClient, job: PrintJob) {
+async function reconcilePrintJob(
+  supabase: SupabaseClient,
+  job: PrintJob,
+  actorId: string,
+) {
   if (!job.printnode_job_id) return job;
   try {
     const states = await getPrintNodeJobStates([Number(job.printnode_job_id)]);
@@ -545,6 +660,7 @@ async function reconcilePrintJob(supabase: SupabaseClient, job: PrintJob) {
       p_job_id: job.id,
       p_state: latest.state,
       p_message: latest.message,
+      p_actor_id: actorId,
     });
     if (error) {
       logPrintEvent("printnode_state_database_update_failed", {
@@ -566,7 +682,11 @@ async function reconcilePrintJob(supabase: SupabaseClient, job: PrintJob) {
   }
 }
 
-async function reconcilePrintJobs(supabase: SupabaseClient, jobs: PrintJob[]) {
+async function reconcilePrintJobs(
+  supabase: SupabaseClient,
+  jobs: PrintJob[],
+  actorId: string,
+) {
   const ids = jobs
     .map((job) => Number(job.printnode_job_id))
     .filter((id) => Number.isSafeInteger(id) && id > 0);
@@ -594,6 +714,7 @@ async function reconcilePrintJobs(supabase: SupabaseClient, jobs: PrintJob[]) {
         p_job_id: job.id,
         p_state: latest.state,
         p_message: latest.message,
+        p_actor_id: actorId,
       });
       if (!error) updatedCount += 1;
     }
@@ -631,24 +752,38 @@ async function loadAllUnresolvedPrintJobs(supabase: SupabaseClient) {
   }
 }
 
-async function recoverSubmissionBySource(supabase: SupabaseClient, job: PrintJob) {
+async function recoverSubmissionBySource(
+  supabase: SupabaseClient,
+  job: PrintJob,
+  actorId: string,
+) {
   const recovered = await findPrintNodeJobBySource(
     printNodeSource(job.id),
     job.processing_started_at ?? job.created_at,
   ).catch(() => null);
-  if (!recovered) return null;
-  return recordSubmissionWithRetry(supabase, job.id, Number(recovered.id));
+  if (!recovered || !job.dispatch_token) return null;
+  return recordSubmissionWithRetry(
+    supabase,
+    job.id,
+    Number(recovered.id),
+    job.dispatch_token,
+    actorId,
+  );
 }
 
 async function recordSubmissionWithRetry(
   supabase: SupabaseClient,
   jobId: string,
   printNodeJobId: number,
+  dispatchToken: string,
+  actorId: string,
 ) {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const { data, error } = await supabase.rpc("record_printnode_submission", {
       p_job_id: jobId,
       p_printnode_job_id: printNodeJobId,
+      p_dispatch_token: dispatchToken,
+      p_actor_id: actorId,
     });
     if (!error && data) return data as PrintJob;
     logPrintEvent("printnode_submission_database_update_retry", {
@@ -667,13 +802,67 @@ async function recordSubmissionWithRetry(
 async function markJobUncertain(
   supabase: SupabaseClient,
   jobId: string,
+  dispatchToken: string | null,
   staffMessage: string,
   technicalError: string,
+  actorId: string,
 ) {
-  await supabase.rpc("mark_print_job_uncertain", {
+  if (dispatchToken) {
+    await supabase.rpc("mark_print_job_uncertain", {
+      p_job_id: jobId,
+      p_dispatch_token: dispatchToken,
+      p_staff_message: staffMessage,
+      p_technical_error: technicalError,
+      p_actor_id: actorId,
+    });
+    return;
+  }
+
+  await supabase
+    .from("print_jobs")
+    .update({
+      status: "printing",
+      verification_required_at: new Date().toISOString(),
+      staff_message: staffMessage,
+      technical_error: technicalError,
+      error_message: null,
+    })
+    .eq("id", jobId)
+    .eq("status", "printing")
+    .is("dispatch_token", null);
+}
+
+async function releasePrintJob(
+  supabase: SupabaseClient,
+  jobId: string,
+  dispatchToken: string,
+  staffMessage: string,
+  technicalError: string,
+  actorId: string,
+) {
+  await supabase.rpc("release_print_job", {
     p_job_id: jobId,
+    p_dispatch_token: dispatchToken,
     p_staff_message: staffMessage,
     p_technical_error: technicalError,
+    p_actor_id: actorId,
+  });
+}
+
+async function failPrintJob(
+  supabase: SupabaseClient,
+  jobId: string,
+  dispatchToken: string,
+  staffMessage: string,
+  technicalError: string,
+  actorId: string,
+) {
+  await supabase.rpc("fail_print_job", {
+    p_job_id: jobId,
+    p_dispatch_token: dispatchToken,
+    p_staff_message: staffMessage,
+    p_technical_error: technicalError,
+    p_actor_id: actorId,
   });
 }
 
@@ -722,10 +911,29 @@ async function loadOrderTicketPrintMode(
     .from("restaurant_settings")
     .select("order_ticket_print_mode")
     .single();
-  if (error) return "legacy_three_copies";
+  if (error) {
+    throw new PrintPreparationError("database_unreachable", error.message);
+  }
+  if (!data?.order_ticket_print_mode) {
+    throw new PrintPreparationError(
+      "invalid_data",
+      "Modalità di stampa non configurata",
+    );
+  }
   return data?.order_ticket_print_mode === "legacy_three_copies"
     ? "legacy_three_copies"
     : "department_split";
+}
+
+function getPrintAdminClient() {
+  try {
+    return createAdminClient();
+  } catch (error) {
+    logPrintEvent("print_admin_client_unavailable", {
+      error: error instanceof Error ? error.message : "Errore sconosciuto",
+    });
+    return null;
+  }
 }
 
 async function getOrderForAutomaticPrint(supabase: SupabaseClient, orderId: string) {

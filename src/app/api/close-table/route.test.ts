@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getPrintNodeJobStates: vi.fn(),
   getPrinterAvailability: vi.fn(),
   createClient: vi.fn(),
+  createAdminClient: vi.fn(),
 }));
 
 vi.mock("@/lib/auth", () => ({ getCurrentProfile: mocks.getCurrentProfile }));
@@ -35,6 +36,9 @@ vi.mock("@/lib/printnode", () => {
   };
 });
 vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.createClient }));
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: mocks.createAdminClient,
+}));
 
 import { POST } from "@/app/api/close-table/route";
 import { PrintNodeSubmissionError } from "@/lib/printnode";
@@ -79,7 +83,7 @@ function supabaseMock(options?: {
 }) {
   let currentJob = options?.job ?? receiptJob;
   const currentOrder = options?.currentOrder ?? order;
-  const rpc = vi.fn(async (name: string) => {
+  const rpc = vi.fn(async (name: string, args?: Record<string, unknown>) => {
     if (options?.rpcError) return { data: null, error: options.rpcError };
     if (name === "get_or_create_receipt_print_job") {
       return { data: currentJob, error: null };
@@ -90,8 +94,13 @@ function supabaseMock(options?: {
         status: "printing",
         retry_count: currentJob.retry_count + 1,
         processing_started_at: "2026-07-06T10:01:00.000Z",
+        dispatch_token: String(args?.p_dispatch_token),
+        dispatch_expires_at: "2026-07-06T10:03:00.000Z",
       };
       return { data: { job: currentJob, claimed: true }, error: null };
+    }
+    if (name === "verify_print_job_dispatch") {
+      return { data: true, error: null };
     }
     if (name === "record_printnode_submission") {
       if (options?.recordSubmissionFails) {
@@ -117,6 +126,11 @@ function supabaseMock(options?: {
     if (name === "confirm_receipt_manual_and_close") {
       return { data: { ...currentOrder, status: "closed" }, error: null };
     }
+    if (name === "close_order") {
+      return currentOrder.status === "cancelled"
+        ? { data: null, error: { message: "order cancelled" } }
+        : { data: { ...currentOrder, status: "closed" }, error: null };
+    }
     if (name === "mark_print_job_uncertain") {
       currentJob = {
         ...currentJob,
@@ -140,10 +154,13 @@ function supabaseMock(options?: {
     const builder = {
       update: vi.fn(() => builder),
       eq: vi.fn(() => builder),
+      is: vi.fn(() => builder),
     };
     return builder;
   });
-  return { rpc, from };
+  const client = { rpc, from };
+  mocks.createAdminClient.mockReturnValue(client);
+  return client;
 }
 
 describe("POST /api/close-table", () => {
@@ -154,7 +171,7 @@ describe("POST /api/close-table", () => {
       active: true,
       role: "cashier",
     });
-    mocks.loadOrderForPrint.mockResolvedValue(order);
+    mocks.loadOrderForPrint.mockResolvedValue({ ok: true, order });
     mocks.getPrinterAvailability.mockResolvedValue({
       configured: true,
       available: true,
@@ -322,7 +339,11 @@ describe("POST /api/close-table", () => {
     mocks.findPrintNodeJobBySource.mockResolvedValue({ id: 321 });
     mocks.createClient.mockResolvedValue(
       supabaseMock({
-        job: { ...receiptJob, status: "printing" },
+        job: {
+          ...receiptJob,
+          status: "printing",
+          dispatch_token: "00000000-0000-4000-8000-000000000099",
+        },
         currentOrder: { ...order, status: "closed" },
       }),
     );
@@ -384,6 +405,9 @@ describe("POST /api/close-table", () => {
           error: null,
         };
       }
+      if (name === "verify_print_job_dispatch") {
+        return { data: true, error: null };
+      }
       if (name === "record_printnode_state") {
         return {
           data: {
@@ -392,6 +416,12 @@ describe("POST /api/close-table", () => {
             retry_count: 1,
             printnode_job_id: 321,
           },
+          error: null,
+        };
+      }
+      if (name === "close_order") {
+        return {
+          data: { ...order, status: "closed" },
           error: null,
         };
       }
