@@ -490,7 +490,7 @@ export function CashierDashboard() {
                       disabled={!canWrite || busyJobId !== null}
                       onClick={() => void cancelQueuedPrintJob(job)}
                     >
-                      Annulla job
+                      {job.job_type === "new_order" ? "Annulla comanda" : "Annulla job"}
                     </button>
                   )}
                   <button onClick={() => setDetailsJob(job)}>
@@ -1376,7 +1376,11 @@ export function CashierDashboard() {
       setMessage(error.message);
       return;
     }
-    setMessage("Job annullato senza inviare alcuna stampa.");
+    setMessage(
+      job.job_type === "new_order"
+        ? "Comanda annullata. Il tavolo non bloccherà la chiusura del servizio."
+        : "Job annullato senza inviare alcuna stampa.",
+    );
     await load();
   }
 }
