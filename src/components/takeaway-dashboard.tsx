@@ -318,6 +318,8 @@ export function TakeawayDashboard() {
                 name="pickup_at"
                 type="datetime-local"
                 defaultValue={getCurrentLocalDateTime()}
+                min={service ? `${service.business_date}T00:00` : undefined}
+                max={service ? `${service.business_date}T23:59` : undefined}
                 required
               />
             </label>
@@ -337,6 +339,10 @@ export function TakeawayDashboard() {
 
     const data = new FormData(event.currentTarget);
     const pickupValue = String(data.get("pickup_at"));
+    if (!service || !pickupValue.startsWith(`${service.business_date}T`)) {
+      setFormError("L’orario di ritiro deve appartenere al servizio di oggi.");
+      return;
+    }
     setCreating(true);
     setFormError("");
 

@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   findPrintNodeJobBySource: vi.fn(),
   cancelPrintNodeJobs: vi.fn(),
   createClient: vi.fn(),
+  createAdminClient: vi.fn(),
 }));
 
 vi.mock("@/lib/auth", () => ({ getCurrentProfile: mocks.getCurrentProfile }));
@@ -45,6 +46,9 @@ vi.mock("@/lib/printnode", () => {
   };
 });
 vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.createClient }));
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: mocks.createAdminClient,
+}));
 
 import { POST } from "@/app/api/print-order/route";
 import { PrintNodeSubmissionError } from "@/lib/printnode";
@@ -83,9 +87,24 @@ function request() {
 function supabaseMock(
   initialJob: PrintJob,
   printMode: "department_split" | "legacy_three_copies" = "department_split",
+  settingsError = false,
 ) {
   let currentJob = initialJob;
-  const rpc = vi.fn(async (name: string) => {
+  const rpc = vi.fn(async (name: string, args?: Record<string, unknown>) => {
+    if (name === "claim_print_job") {
+      currentJob = {
+        ...currentJob,
+        status: "printing",
+        retry_count: currentJob.retry_count + 1,
+        processing_started_at: "2026-07-06T10:01:00.000Z",
+        dispatch_token: String(args?.p_dispatch_token),
+        dispatch_expires_at: "2026-07-06T10:03:00.000Z",
+      };
+      return { data: { job: currentJob, claimed: true }, error: null };
+    }
+    if (name === "verify_print_job_dispatch") {
+      return { data: true, error: null };
+    }
     if (name === "record_printnode_submission") {
       currentJob = {
         ...currentJob,
@@ -112,6 +131,9 @@ function supabaseMock(
       limit: vi.fn(() => builder),
       single: vi.fn(async () => {
         if (table === "restaurant_settings") {
+          if (settingsError) {
+            return { data: null, error: { message: "settings unavailable" } };
+          }
           return { data: { order_ticket_print_mode: printMode }, error: null };
         }
         return { data: null, error: null };
@@ -142,7 +164,9 @@ function supabaseMock(
     };
     return builder;
   });
-  return { rpc, from };
+  const client = { rpc, from };
+  mocks.createAdminClient.mockReturnValue(client);
+  return client;
 }
 
 describe("POST /api/print-order", () => {
@@ -153,7 +177,7 @@ describe("POST /api/print-order", () => {
       role: "cashier",
       active: true,
     });
-    mocks.loadOrderForPrint.mockResolvedValue(order);
+    mocks.loadOrderForPrint.mockResolvedValue({ ok: true, order });
     mocks.getPrinterAvailability.mockResolvedValue({
       configured: true,
       available: true,
@@ -226,5 +250,38 @@ describe("POST /api/print-order", () => {
       "mark_print_job_uncertain",
       expect.objectContaining({ p_job_id: job.id }),
     );
+  });
+
+  it("rimette il job in coda se i dati ordine non sono leggibili", async () => {
+    const supabase = supabaseMock(job);
+    mocks.createClient.mockResolvedValue(supabase);
+    mocks.loadOrderForPrint.mockResolvedValue({
+      ok: false,
+      reason: "database_error",
+      technicalMessage: "orders query timeout",
+    });
+
+    const response = await POST(request());
+    const payload = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(payload.outcome).toBe("database_unreachable");
+    expect(mocks.createPrintNodeJob).not.toHaveBeenCalled();
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      "release_print_job",
+      expect.objectContaining({ p_job_id: job.id }),
+    );
+  });
+
+  it("non ripiega sulle tre copie se le impostazioni non sono leggibili", async () => {
+    const supabase = supabaseMock(job, "department_split", true);
+    mocks.createClient.mockResolvedValue(supabase);
+
+    const response = await POST(request());
+    const payload = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(payload.outcome).toBe("database_unreachable");
+    expect(mocks.createPrintNodeJob).not.toHaveBeenCalled();
   });
 });

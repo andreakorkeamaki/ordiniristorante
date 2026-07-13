@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -14,6 +15,7 @@ import {
   PrintNodeSubmissionError,
   type PrinterAvailability,
 } from "@/lib/printnode";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import type { Order, PrintJob } from "@/types/domain";
 
@@ -72,14 +74,32 @@ export async function POST(request: Request) {
     });
   }
 
-  const order = await loadOrderForPrint(supabase, parsed.data.orderId);
-  if (!order) {
+  let admin: SupabaseClient;
+  try {
+    admin = createAdminClient();
+  } catch (error) {
     return failure("supabase_unreachable", 503, startedAt, {
       order_id: parsed.data.orderId,
       actor_id: profile.id,
-      technical_error: "Order read failed",
+      technical_error:
+        error instanceof Error ? error.message : "Supabase server secret missing",
     });
   }
+
+  const orderResult = await loadOrderForPrint(supabase, parsed.data.orderId);
+  if (!orderResult.ok) {
+    return failure(
+      orderResult.reason === "database_error" ? "supabase_unreachable" : "invalid_state",
+      orderResult.reason === "database_error" ? 503 : 404,
+      startedAt,
+      {
+        order_id: parsed.data.orderId,
+        actor_id: profile.id,
+        technical_error: orderResult.technicalMessage,
+      },
+    );
+  }
+  const order = orderResult.order;
   if (order.status === "closed") {
     return NextResponse.json({ closed: true, idempotent: true, copies: 1 });
   }
@@ -158,8 +178,11 @@ export async function POST(request: Request) {
   }
 
   if (job.printnode_job_id) {
-    job = await reconcileReceipt(supabase, job);
-    const current = await loadCurrentOrder(supabase, order.id);
+    job = await reconcileReceipt(admin, job, profile.id);
+    const current =
+      job.status === "printed"
+        ? await closeConfirmedReceipt(supabase, order)
+        : await loadCurrentOrder(supabase, order.id);
     return receiptResponse(current, job, startedAt, profile.id, true);
   }
 
@@ -168,18 +191,29 @@ export async function POST(request: Request) {
       receiptSource(job.id),
       job.processing_started_at ?? job.created_at,
     ).catch(() => null);
-    if (recovered) {
-      const saved = await recordSubmission(supabase, job.id, recovered.id);
-      if (saved) job = await reconcileReceipt(supabase, saved);
-      const current = await loadCurrentOrder(supabase, order.id);
+    if (recovered && job.dispatch_token) {
+      const saved = await recordSubmission(
+        admin,
+        job.id,
+        recovered.id,
+        job.dispatch_token,
+        profile.id,
+      );
+      if (saved) job = await reconcileReceipt(admin, saved, profile.id);
+      const current =
+        job.status === "printed"
+          ? await closeConfirmedReceipt(supabase, order)
+          : await loadCurrentOrder(supabase, order.id);
       return receiptResponse(current, job, startedAt, profile.id, true);
     }
 
     await markUncertain(
-      supabase,
+      admin,
       job.id,
+      job.dispatch_token,
       "Esito dello scontrino da verificare prima di qualsiasi nuovo invio",
       "Receipt printing without recoverable PrintNode id",
+      profile.id,
     );
     return failure("outcome_uncertain", 202, startedAt, context(order, job, profile.id));
   }
@@ -206,9 +240,14 @@ export async function POST(request: Request) {
     });
   }
 
-  const { data: claimedData, error: claimError } = await supabase.rpc(
+  const dispatchToken = randomUUID();
+  const { data: claimedData, error: claimError } = await admin.rpc(
     "claim_print_job",
-    { p_job_id: job.id },
+    {
+      p_job_id: job.id,
+      p_dispatch_token: dispatchToken,
+      p_actor_id: profile.id,
+    },
   );
   if (claimError || !claimedData) {
     return failure("supabase_unreachable", 503, startedAt, {
@@ -219,8 +258,11 @@ export async function POST(request: Request) {
   const claimResult = claimedData as { job: PrintJob; claimed: boolean };
   job = claimResult.job;
   if (!claimResult.claimed) {
-    if (job.printnode_job_id) job = await reconcileReceipt(supabase, job);
-    const current = await loadCurrentOrder(supabase, order.id);
+    if (job.printnode_job_id) job = await reconcileReceipt(admin, job, profile.id);
+    const current =
+      job.status === "printed"
+        ? await closeConfirmedReceipt(supabase, order)
+        : await loadCurrentOrder(supabase, order.id);
     return receiptResponse(current, job, startedAt, profile.id, true);
   }
   if (job.printnode_job_id || job.status !== "printing") {
@@ -229,6 +271,24 @@ export async function POST(request: Request) {
   }
 
   try {
+    const { data: dispatchable, error: dispatchError } = await admin.rpc(
+      "verify_print_job_dispatch",
+      { p_job_id: job.id, p_dispatch_token: dispatchToken },
+    );
+    if (dispatchError || dispatchable !== true) {
+      await releaseReceipt(
+        admin,
+        job.id,
+        dispatchToken,
+        dispatchError?.message ?? "Receipt dispatch invalidated",
+        profile.id,
+      );
+      return failure("conflict", 409, startedAt, {
+        ...context(order, job, profile.id),
+        technical_error: dispatchError?.message ?? "Receipt dispatch invalidated",
+      });
+    }
+
     const submission = await createPrintNodeJob({
       title: `SCONTRINO #${order.order_number}`,
       content: buildRaw80mmReceipt(order),
@@ -243,13 +303,21 @@ export async function POST(request: Request) {
       outcome: submission.recovered ? "recovered" : "accepted",
     });
 
-    const saved = await recordSubmission(supabase, job.id, submission.id);
+    const saved = await recordSubmission(
+      admin,
+      job.id,
+      submission.id,
+      dispatchToken,
+      profile.id,
+    );
     if (!saved) {
       await markUncertain(
-        supabase,
+        admin,
         job.id,
+        dispatchToken,
         "PrintNode ha accettato lo scontrino, ma lo stato locale non è confermato",
         `PrintNode job ${submission.id} accepted; database update failed`,
+        profile.id,
       );
       return failure("accepted_db_unconfirmed", 202, startedAt, {
         ...context(order, job, profile.id),
@@ -257,8 +325,11 @@ export async function POST(request: Request) {
       });
     }
 
-    job = await reconcileReceipt(supabase, saved);
-    const current = await loadCurrentOrder(supabase, order.id);
+    job = await reconcileReceipt(admin, saved, profile.id);
+    const current =
+      job.status === "printed"
+        ? await closeConfirmedReceipt(supabase, order)
+        : await loadCurrentOrder(supabase, order.id);
     return receiptResponse(current, job, startedAt, profile.id, submission.recovered);
   } catch (error) {
     const technicalError =
@@ -267,10 +338,12 @@ export async function POST(request: Request) {
       error instanceof PrintNodeSubmissionError && error.outcomeUncertain;
     if (uncertain) {
       await markUncertain(
-        supabase,
+        admin,
         job.id,
+        dispatchToken,
         "PrintNode potrebbe avere ricevuto lo scontrino: verificare il foglio",
         technicalError,
+        profile.id,
       );
       const code =
         error instanceof Error &&
@@ -283,17 +356,13 @@ export async function POST(request: Request) {
       });
     }
 
-    await supabase
-      .from("print_jobs")
-      .update({
-        status: "failed",
-        failed_at: new Date().toISOString(),
-        staff_message: "Invio dello scontrino a PrintNode non riuscito",
-        technical_error: technicalError,
-        error_message: technicalError,
-      })
-      .eq("id", job.id)
-      .eq("status", "printing");
+    await failReceipt(
+      admin,
+      job.id,
+      dispatchToken,
+      technicalError,
+      profile.id,
+    );
     return failure("printnode_unreachable", 503, startedAt, {
       ...context(order, job, profile.id),
       technical_error: technicalError,
@@ -305,11 +374,15 @@ async function recordSubmission(
   supabase: SupabaseClient,
   jobId: string,
   printNodeJobId: number,
+  dispatchToken: string,
+  actorId: string,
 ) {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const { data, error } = await supabase.rpc("record_printnode_submission", {
       p_job_id: jobId,
       p_printnode_job_id: printNodeJobId,
+      p_dispatch_token: dispatchToken,
+      p_actor_id: actorId,
     });
     if (!error && data) return data as PrintJob;
     logReceipt("receipt_submission_db_retry", Date.now(), {
@@ -323,7 +396,11 @@ async function recordSubmission(
   return null;
 }
 
-async function reconcileReceipt(supabase: SupabaseClient, job: PrintJob) {
+async function reconcileReceipt(
+  supabase: SupabaseClient,
+  job: PrintJob,
+  actorId: string,
+) {
   if (!job.printnode_job_id) return job;
   try {
     const states = await getPrintNodeJobStates([Number(job.printnode_job_id)]);
@@ -335,6 +412,7 @@ async function reconcileReceipt(supabase: SupabaseClient, job: PrintJob) {
       p_job_id: job.id,
       p_state: latest.state,
       p_message: latest.message,
+      p_actor_id: actorId,
     });
     if (error || !data) return job;
     return data as PrintJob;
@@ -353,13 +431,65 @@ async function reconcileReceipt(supabase: SupabaseClient, job: PrintJob) {
 async function markUncertain(
   supabase: SupabaseClient,
   jobId: string,
+  dispatchToken: string | null,
   staffMessage: string,
   technicalError: string,
+  actorId: string,
 ) {
-  await supabase.rpc("mark_print_job_uncertain", {
+  if (dispatchToken) {
+    await supabase.rpc("mark_print_job_uncertain", {
+      p_job_id: jobId,
+      p_dispatch_token: dispatchToken,
+      p_staff_message: staffMessage,
+      p_technical_error: technicalError,
+      p_actor_id: actorId,
+    });
+    return;
+  }
+
+  await supabase
+    .from("print_jobs")
+    .update({
+      status: "printing",
+      verification_required_at: new Date().toISOString(),
+      staff_message: staffMessage,
+      technical_error: technicalError,
+      error_message: null,
+    })
+    .eq("id", jobId)
+    .eq("status", "printing")
+    .is("dispatch_token", null);
+}
+
+async function releaseReceipt(
+  supabase: SupabaseClient,
+  jobId: string,
+  dispatchToken: string,
+  technicalError: string,
+  actorId: string,
+) {
+  await supabase.rpc("release_print_job", {
     p_job_id: jobId,
-    p_staff_message: staffMessage,
+    p_dispatch_token: dispatchToken,
+    p_staff_message: "Invio scontrino annullato perché lo stato è cambiato",
     p_technical_error: technicalError,
+    p_actor_id: actorId,
+  });
+}
+
+async function failReceipt(
+  supabase: SupabaseClient,
+  jobId: string,
+  dispatchToken: string,
+  technicalError: string,
+  actorId: string,
+) {
+  await supabase.rpc("fail_print_job", {
+    p_job_id: jobId,
+    p_dispatch_token: dispatchToken,
+    p_staff_message: "Invio dello scontrino a PrintNode non riuscito",
+    p_technical_error: technicalError,
+    p_actor_id: actorId,
   });
 }
 

@@ -8,17 +8,38 @@ import type {
   RestaurantTable,
 } from "@/types/domain";
 
+export type LoadOrderForPrintResult =
+  | { ok: true; order: Order }
+  | {
+      ok: false;
+      reason: "not_found" | "database_error" | "incomplete_data";
+      technicalMessage: string;
+    };
+
 export async function loadOrderForPrint(
   supabase: SupabaseClient,
   orderId: string,
-) {
+): Promise<LoadOrderForPrintResult> {
   const orderResult = await supabase
     .from("orders")
     .select("*")
     .eq("id", orderId)
     .maybeSingle();
 
-  if (orderResult.error || !orderResult.data) return null;
+  if (orderResult.error) {
+    return {
+      ok: false,
+      reason: "database_error",
+      technicalMessage: orderResult.error.message,
+    };
+  }
+  if (!orderResult.data) {
+    return {
+      ok: false,
+      reason: "not_found",
+      technicalMessage: "Order not found",
+    };
+  }
   const rawOrder = orderResult.data as Order;
 
   const [tableResult, profileResult, linesResult] = await Promise.all([
@@ -43,12 +64,20 @@ export async function loadOrderForPrint(
       .order("created_at"),
   ]);
 
-  if (
-    tableResult.error ||
-    profileResult.error ||
-    linesResult.error
-  ) {
-    return null;
+  const relatedError = tableResult.error ?? profileResult.error ?? linesResult.error;
+  if (relatedError) {
+    return {
+      ok: false,
+      reason: "database_error",
+      technicalMessage: relatedError.message,
+    };
+  }
+  if (rawOrder.table_id && !tableResult.data) {
+    return {
+      ok: false,
+      reason: "incomplete_data",
+      technicalMessage: "Order table snapshot is missing",
+    };
   }
 
   const items = (linesResult.data ?? []).map((row) => {
@@ -72,9 +101,12 @@ export async function loadOrderForPrint(
   });
 
   return {
-    ...rawOrder,
-    table: (tableResult.data as RestaurantTable | null) ?? undefined,
-    waiter: (profileResult.data as Profile | null) ?? undefined,
-    items,
-  } satisfies Order;
+    ok: true,
+    order: {
+      ...rawOrder,
+      table: (tableResult.data as RestaurantTable | null) ?? undefined,
+      waiter: (profileResult.data as Profile | null) ?? undefined,
+      items,
+    } satisfies Order,
+  };
 }

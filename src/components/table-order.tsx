@@ -16,6 +16,7 @@ import {
   canSendOrderUpdate,
 } from "@/lib/order-workflow";
 import { getOrderShortLabel } from "@/lib/order-display";
+import { aggregateIdenticalOrderItems } from "@/lib/order-items";
 import { formatServiceLabel, isPreviousService } from "@/lib/service-management";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentService } from "@/hooks/use-current-service";
@@ -411,6 +412,10 @@ export function TableOrder({
     () => aggregateMenuItemQuantities(items),
     [items],
   );
+  const displayedItems = useMemo(
+    () => aggregateIdenticalOrderItems(items),
+    [items],
+  );
 
   if (serviceState === "error") {
     return (
@@ -639,7 +644,7 @@ export function TableOrder({
 
           <div className="order-lines">
             {items.length === 0 && <p className="empty-line">Tocca un prodotto per iniziare.</p>}
-            {items.map((item) => (
+            {displayedItems.map((item) => (
               <article className="order-line" key={item.id}>
                 <div className="line-main">
                   <div><strong>{item.item_name_snapshot}</strong><small>{formatCurrency(item.item_price_snapshot)} cad.</small></div>

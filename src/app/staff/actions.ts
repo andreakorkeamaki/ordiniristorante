@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { safeInternalRedirectPath } from "@/lib/safe-redirect";
 import { createClient } from "@/lib/supabase/server";
 
 export async function login(formData: FormData) {
@@ -14,7 +15,8 @@ export async function login(formData: FormData) {
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) redirect("/staff?error=credentials");
 
-  if (next.startsWith("/")) redirect(next);
+  const safeNext = safeInternalRedirectPath(next);
+  if (safeNext) redirect(safeNext);
 
   const {
     data: { user },
