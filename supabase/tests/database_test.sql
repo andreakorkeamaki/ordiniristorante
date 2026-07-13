@@ -1,5 +1,5 @@
 begin;
-select plan(169);
+select plan(176);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -185,6 +185,21 @@ select ok(
     'EXECUTE'
   ),
   'the server role can attest verified PrintNode state'
+);
+select ok(
+  has_table_privilege('service_role', 'public.orders', 'SELECT')
+  and has_table_privilege('service_role', 'public.restaurant_services', 'SELECT')
+  and has_table_privilege('service_role', 'public.print_jobs', 'SELECT')
+  and has_table_privilege('service_role', 'public.print_jobs', 'UPDATE'),
+  'the server role can claim and verify print jobs'
+);
+select ok(
+  has_function_privilege(
+    'service_role',
+    'private.log_order_activity(uuid,text,jsonb)',
+    'EXECUTE'
+  ),
+  'the server role can audit print state transitions'
 );
 select ok(
   not has_function_privilege(
@@ -409,7 +424,24 @@ select throws_ok(
 insert into public.restaurant_tables (id, table_number, display_name)
 values
   ('00000000-0000-4000-9000-000000009911', 9901, 'Test invio valido'),
-  ('00000000-0000-4000-9000-000000009912', 9902, 'Test invio non valido');
+  ('00000000-0000-4000-9000-000000009912', 9902, 'Test invio non valido'),
+  ('00000000-0000-4000-9000-000000009913', 9903, 'Test apertura cameriere');
+
+set local role authenticated;
+
+select lives_ok(
+  $$
+    select public.get_or_create_active_order(
+      '00000000-0000-4000-9000-000000009913'
+    )
+  $$,
+  'a waiter can open a table during the current service'
+);
+
+reset role;
+
+delete from public.orders
+where table_id = '00000000-0000-4000-9000-000000009913';
 
 select throws_ok(
   $$
@@ -1583,6 +1615,29 @@ select is(
 
 rollback to savepoint receipt_confirmed_printed_order_close_tests;
 
+savepoint safe_service_close_draft_blocker_tests;
+
+insert into public.restaurant_tables (id, table_number, display_name)
+values ('00000000-0000-4000-9000-000000009914', 9904, 'Test bozza chiusura');
+
+insert into public.orders (id, table_id, service_id, cover_price_snapshot)
+values (
+  '00000000-0000-4000-9000-000000009924',
+  '00000000-0000-4000-9000-000000009914',
+  (select id from public.restaurant_services where closed_at is null),
+  0
+);
+
+select is(
+  coalesce((
+    public.get_service_close_blockers(
+      (select id from public.restaurant_services where closed_at is null)
+    ) -> 'orders' ->> 'draft'
+  )::integer, 0),
+  1,
+  'an unsubmitted draft is reported as a service-close blocker'
+);
+
 select throws_ok(
   $$
     select public.close_service(
@@ -1591,18 +1646,56 @@ select throws_ok(
     )
   $$,
   'P0001',
-  'Ci sono ancora 1 ordini aperti',
-  'closing without confirmation refuses open tables'
+  'Ci sono ancora 1 ordini senza comanda stampata e 0 job di stampa da risolvere',
+  'safe closure refuses an unsubmitted draft'
+);
+
+rollback to savepoint safe_service_close_draft_blocker_tests;
+
+update public.print_jobs
+set status = 'printed',
+    printed_at = coalesce(printed_at, now())
+where order_id in (
+    select id
+    from public.orders
+    where service_id = (
+      select id from public.restaurant_services where closed_at is null
+    )
+  )
+  and status in ('pending', 'failed');
+
+select is(
+  public.get_service_close_blockers(
+    (select id from public.restaurant_services where closed_at is null)
+  ) -> 'orders',
+  '{}'::jsonb,
+  'submitted orders with printed commands do not block service closure'
+);
+select is(
+  public.get_service_close_blockers(
+    (select id from public.restaurant_services where closed_at is null)
+  ) -> 'jobs',
+  '{}'::jsonb,
+  'a fully resolved print queue has no service-close blockers'
 );
 select lives_ok(
   $$
     select public.close_service(
       (select id from public.restaurant_services where closed_at is null),
-      true,
-      'Chiusura forzata controllata dal test database'
+      false
     )
   $$,
-  'confirmed service closure succeeds'
+  'safe service closure succeeds when all commands and updates are printed'
+);
+select is(
+  (
+    select forced_close
+    from public.restaurant_services
+    order by closed_at desc nulls last
+    limit 1
+  ),
+  false,
+  'fully printed service closure is not recorded as forced'
 );
 select is(
   (
