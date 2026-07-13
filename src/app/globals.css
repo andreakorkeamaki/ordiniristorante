@@ -1641,11 +1641,20 @@ code {
 }
 
 .service-warning,
-.service-error {
+.service-error,
+.service-success {
   display: block;
   margin-top: 0.5rem;
-  color: #7c241e;
   font-size: 0.76rem;
+}
+
+.service-warning,
+.service-error {
+  color: #7c241e;
+}
+
+.service-success {
+  color: #176b2c;
 }
 
 .service-actions {
@@ -1668,6 +1677,25 @@ code {
 
 .service-close-modal p {
   color: var(--muted);
+}
+
+.service-summary-print-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: -0.25rem 0 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #d9a8a2;
+  border-left: 0.35rem solid var(--amber);
+  border-radius: 0.85rem;
+  background: #fff3dd;
+}
+
+.service-summary-print-alert p {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .cashier-filters {
@@ -2949,9 +2977,14 @@ code {
   }
 
   .service-control,
-  .staff-service-status {
+  .staff-service-status,
+  .service-summary-print-alert {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .service-summary-print-alert .button {
+    width: 100%;
   }
 
   .takeaway-toolbar {

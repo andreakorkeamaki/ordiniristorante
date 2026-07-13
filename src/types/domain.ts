@@ -103,6 +103,46 @@ export interface RestaurantService {
   updated_at: string;
 }
 
+export type ServiceCloseReportPrintStatus =
+  | "pending"
+  | "submitted"
+  | "failed"
+  | "uncertain";
+
+export interface ServiceCloseSummaryRow {
+  kind: OrderType;
+  label: string;
+  order_number: number | null;
+  cover_count: number;
+  total: number;
+}
+
+export interface ServiceCloseReport {
+  id: string;
+  service_id: string;
+  business_date: string;
+  period: ServicePeriod;
+  opened_at: string;
+  closed_at: string;
+  forced_close: boolean;
+  summary_rows: ServiceCloseSummaryRow[];
+  dine_in_count: number;
+  takeaway_count: number;
+  cover_count: number;
+  dine_in_total: number;
+  takeaway_total: number;
+  service_total: number;
+  print_status: ServiceCloseReportPrintStatus;
+  printnode_job_id: number | null;
+  print_attempt_count: number;
+  auto_idempotency_key: string;
+  last_print_error: string | null;
+  last_printed_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface OrderItemExtra {
   id: string;
   order_item_id: string;

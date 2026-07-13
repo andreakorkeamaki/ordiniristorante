@@ -1,11 +1,12 @@
 begin;
-select plan(161);
+select plan(169);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
 select has_table('public', 'print_jobs', 'print_jobs exists');
 select has_table('public', 'menu_items', 'menu_items exists');
 select has_table('public', 'restaurant_services', 'restaurant services exist');
+select has_table('public', 'service_close_reports', 'service close reports exist');
 select has_index('public', 'orders', 'orders_one_active_per_table_idx', 'one active order index exists');
 select has_index(
   'public',
@@ -24,6 +25,18 @@ select has_index(
   'restaurant_services',
   'restaurant_services_one_open_idx',
   'only one restaurant service can be open'
+);
+select has_index(
+  'public',
+  'service_close_reports',
+  'service_close_reports_closed_at_idx',
+  'service close reports are ordered by closing time'
+);
+select has_index(
+  'public',
+  'service_close_reports',
+  'service_close_reports_created_by_idx',
+  'service close report creators are indexed'
 );
 select has_index(
   'public',
@@ -92,6 +105,24 @@ select has_column(
   'forced service closure stores its reason'
 );
 select has_column('public', 'orders', 'service_id', 'orders belong to a service');
+select has_column(
+  'public',
+  'service_close_reports',
+  'summary_rows',
+  'service close reports persist their immutable rows'
+);
+select has_column(
+  'public',
+  'service_close_reports',
+  'service_total',
+  'service close reports persist the final total'
+);
+select has_column(
+  'public',
+  'service_close_reports',
+  'print_status',
+  'service close reports persist print recovery state'
+);
 select has_column('public', 'orders', 'order_type', 'orders distinguish tables and takeaways');
 select has_column('public', 'orders', 'takeaway_name', 'takeaways store the customer name');
 select has_column('public', 'orders', 'takeaway_pickup_at', 'takeaways store the pickup time');
@@ -228,6 +259,19 @@ select policies_are(
     'restaurant_services_staff_select'
   ],
   'restaurant service policies are explicit'
+);
+select policies_are(
+  'public',
+  'service_close_reports',
+  array[]::text[],
+  'service close reports have no browser policies'
+);
+select ok(
+  not has_table_privilege('authenticated', 'public.service_close_reports', 'SELECT')
+  and has_table_privilege('service_role', 'public.service_close_reports', 'SELECT')
+  and has_table_privilege('service_role', 'public.service_close_reports', 'INSERT')
+  and has_table_privilege('service_role', 'public.service_close_reports', 'UPDATE'),
+  'only the server role can persist service close reports'
 );
 select policies_are(
   'public',
