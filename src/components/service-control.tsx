@@ -176,8 +176,9 @@ export function ServiceControl({
             <p className="eyebrow">Fine servizio</p>
             <h2>Chiudere {formatServiceLabel(service)}?</h2>
             <p>
-              La chiusura sicura verifica prima ordini e job di stampa. Nessun
-              ordine aperto verrà chiuso automaticamente.
+              La chiusura sicura blocca solo bozze non inviate o stampe da
+              risolvere. Le comande già stampate verranno chiuse
+              automaticamente.
             </p>
             <p>
               Al termine verrà salvato il riepilogo per tavolo e asporti e ne
@@ -192,7 +193,7 @@ export function ServiceControl({
                 </p>
               </div>
             )}
-            {blockers && countValues(blockers.orders) > 0 && (
+            {blockers && hasForceableBlockers(blockers) && (
               <>
                 <label className="retry-reason">
                   Motivazione della chiusura forzata
@@ -208,7 +209,7 @@ export function ServiceControl({
                     checked={forceAccepted}
                     onChange={(event) => setForceAccepted(event.target.checked)}
                   />
-                  Confermo che gli ordini aperti verranno chiusi o annullati e
+                  Confermo la chiusura anche con bozze o stampe non risolte e
                   che la motivazione resterà auditata.
                 </label>
               </>
@@ -229,8 +230,7 @@ export function ServiceControl({
                 {busy ? "Chiusura…" : "Chiudi e stampa 1 copia"}
               </button>
               {blockers &&
-                countValues(blockers.orders) > 0 &&
-                countUnsafeJobs(blockers.jobs) === 0 && (
+                hasForceableBlockers(blockers) && (
                   <button
                     className="button button-danger"
                     disabled={
@@ -390,11 +390,34 @@ function countUnsafeJobs(counts: Record<string, number>) {
   return (counts.printing ?? 0) + (counts.uncertain ?? 0);
 }
 
+function hasForceableBlockers(blockers: {
+  orders: Record<string, number>;
+  jobs: Record<string, number>;
+}) {
+  return (
+    countValues(blockers.orders) + countValues(blockers.jobs) > 0 &&
+    countUnsafeJobs(blockers.jobs) === 0
+  );
+}
+
 function formatCounts(counts: Record<string, number>) {
   const entries = Object.entries(counts).filter(([, count]) => count > 0);
   return entries.length
-    ? entries.map(([status, count]) => `${status} ${count}`).join(", ")
+    ? entries
+        .map(([status, count]) => `${countLabel(status)} ${count}`)
+        .join(", ")
     : "nessuno";
+}
+
+function countLabel(status: string) {
+  return {
+    draft: "bozze",
+    unprinted: "senza stampa",
+    pending: "in attesa",
+    printing: "in stampa",
+    failed: "non riusciti",
+    uncertain: "da verificare",
+  }[status] ?? status;
 }
 
 function formatBusinessDate(value: string) {
