@@ -31,6 +31,8 @@ from public, anon, authenticated;
 grant usage on schema private to service_role;
 grant select on public.orders, public.restaurant_services to service_role;
 grant select, update on public.print_jobs to service_role;
+grant execute on function private.log_order_activity(uuid, text, jsonb)
+to service_role;
 
 -- Obsolete entry points predate the audited print workflow and must not remain
 -- callable after receipt and retry state machines have been introduced.
