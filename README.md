@@ -7,8 +7,9 @@ ordini e stati sincronizzati fra telefoni, tablet e PC anche su reti diverse.
 ## Funzioni e accessi
 
 - `/menu`: menu pubblico IT/EN di sola lettura, con ricerca e avviso allergeni.
-- `/staff`: accesso email/password; recupero e cambio password usano le pagine
-  pubbliche dedicate sotto `/staff`.
+- `/staff`: accesso email/password; `/staff/forgot-password` e
+  `/staff/reset-password` gestiscono recupero e cambio password, mentre
+  `/auth/callback` scambia in sicurezza il codice della sessione.
 - `/staff/tables`: tavoli del servizio corrente, ricerca, stato in tempo reale e
   ristampa della comanda; è disponibile a tutti i profili attivi.
 - `/staff/table/[id]`: comanda al tavolo con coperti, note, extra, Presence,
@@ -24,6 +25,8 @@ ordini e stati sincronizzati fra telefoni, tablet e PC anche su reti diverse.
 - `/admin`: categorie e prodotti riordinabili, disponibilità e visibilità del
   menu, extra, tavoli, impostazioni, modalità di stampa e prove PrintNode/browser;
   è riservata agli amministratori.
+- `/admin/print-test`: anteprima e prova di stampa browser riservata agli
+  amministratori.
 
 Le route server principali sono `/api/health`, `/api/print-order`,
 `/api/close-table`, `/api/close-service` e `/api/print-test-order`. Applicano i
