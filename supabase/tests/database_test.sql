@@ -549,7 +549,7 @@ select is(
   (
     select count(*)::integer
     from public.order_activity
-    where details ->> 'customer_name' = 'Giulia Test'
+    where payload ->> 'customer_name' = 'Giulia Test'
   ),
   0,
   'a waiter cannot read takeaway customer data through activity history'
