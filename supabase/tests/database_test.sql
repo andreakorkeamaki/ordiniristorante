@@ -1,5 +1,5 @@
 begin;
-select plan(176);
+select plan(181);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -727,6 +727,76 @@ select is(
   ),
   '00000000-0000-4000-9000-000000009921:new_order',
   'the idempotency key contains order and type'
+);
+
+insert into public.restaurant_tables (id, table_number, display_name)
+values ('00000000-0000-4000-9000-000000009915', 9905, 'Test comanda annullata');
+
+insert into public.orders (id, table_id, service_id, cover_price_snapshot)
+values (
+  '00000000-0000-4000-9000-000000009925',
+  '00000000-0000-4000-9000-000000009915',
+  (select id from public.restaurant_services where closed_at is null),
+  0
+);
+
+select lives_ok(
+  $test$
+    do $$
+    begin
+      perform public.add_order_item(
+        '00000000-0000-4000-9000-000000009925',
+        '00000000-0000-4000-8000-000000001001',
+        ''
+      );
+      perform public.send_order_to_cashier(
+        '00000000-0000-4000-9000-000000009925'
+      );
+      perform public.cancel_print_job(
+        (
+          select id from public.print_jobs
+          where order_id = '00000000-0000-4000-9000-000000009925'
+            and job_type = 'new_order'
+        ),
+        'Comanda iniziale annullata nel test prima dell''invio'
+      );
+    end;
+    $$
+  $test$,
+  'a cashier can cancel an unsent initial command atomically'
+);
+select is(
+  (
+    select status::text from public.orders
+    where id = '00000000-0000-4000-9000-000000009925'
+  ),
+  'cancelled',
+  'cancelling an unsent initial command also cancels its order'
+);
+select ok(
+  (
+    select closed_at is not null from public.orders
+    where id = '00000000-0000-4000-9000-000000009925'
+  ),
+  'the cancelled order is terminal and frees its table'
+);
+select is(
+  (
+    select status::text from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009925'
+      and job_type = 'new_order'
+  ),
+  'cancelled',
+  'the unsent initial command stays cancelled'
+);
+select is(
+  (
+    select count(*)::integer from public.print_jobs
+    where order_id = '00000000-0000-4000-9000-000000009925'
+      and job_type = 'cancellation'
+  ),
+  0,
+  'no kitchen cancellation is queued for a command that was never sent'
 );
 
 update public.profiles
