@@ -107,11 +107,13 @@ grant execute on function private.cancel_print_job(uuid, text) to authenticated;
 alter table public.orders disable trigger orders_prepare;
 
 update public.orders as target_order
-set status = 'cancelled',
-    closed_at = coalesce(target_order.closed_at, now()),
-    updated_at = now(),
-    version = target_order.version + 1,
-    updated_by = target_order.updated_by
+set (status, closed_at, updated_at, version, updated_by) = (
+  'cancelled'::public.order_status,
+  coalesce(target_order.closed_at, now()),
+  now(),
+  target_order.version + 1,
+  target_order.updated_by
+)
 where target_order.status in ('pending_cashier', 'confirmed')
   and exists (
     select 1
