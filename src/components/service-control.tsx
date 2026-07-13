@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useConnection } from "@/components/connection-provider";
 import {
   formatServiceLabel,
@@ -8,6 +8,15 @@ import {
 } from "@/lib/service-management";
 import { createClient } from "@/lib/supabase/client";
 import type { RestaurantService, ServicePeriod } from "@/types/domain";
+
+interface CloseReportNotice {
+  serviceId: string;
+  businessDate: string;
+  period: ServicePeriod;
+  total: number;
+  printStatus: "pending" | "submitted" | "failed" | "uncertain";
+  lastPrintError: string | null;
+}
 
 export function ServiceControl({
   service,
@@ -31,12 +40,31 @@ export function ServiceControl({
   const [busy, setBusy] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageTone, setMessageTone] = useState<"success" | "error">("error");
   const [blockers, setBlockers] = useState<{
     orders: Record<string, number>;
     jobs: Record<string, number>;
   } | null>(null);
   const [forceReason, setForceReason] = useState("");
   const [forceAccepted, setForceAccepted] = useState(false);
+  const [closeReport, setCloseReport] = useState<CloseReportNotice | null>(null);
+
+  useEffect(() => {
+    if (service) return;
+    let active = true;
+    void fetch("/api/close-service", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return (await response.json()) as { report: CloseReportNotice | null };
+      })
+      .then((payload) => {
+        if (active) setCloseReport(payload?.report ?? null);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [service]);
 
   if (serviceLoading) {
     return (
@@ -74,9 +102,14 @@ export function ServiceControl({
               È un servizio precedente: chiudilo prima di iniziare quello di oggi.
             </strong>
           )}
-          {(message || serviceError) && (
-            <small className="service-error">{message || serviceError}</small>
+          {message && (
+            <small
+              className={messageTone === "success" ? "service-success" : "service-error"}
+            >
+              {message}
+            </small>
           )}
+          {serviceError && <small className="service-error">{serviceError}</small>}
         </div>
 
         <div className="service-actions">
@@ -116,6 +149,27 @@ export function ServiceControl({
         </div>
       </section>
 
+      {!service && closeReport && closeReport.printStatus !== "submitted" && (
+        <section className="service-summary-print-alert" role="status">
+          <div>
+            <strong>Riepilogo di fine servizio da verificare</strong>
+            <p>
+              {closeReport.period === "cena" ? "Cena" : "Pranzo"} del{" "}
+              {formatBusinessDate(closeReport.businessDate)} · totale{" "}
+              {formatMoney(closeReport.total)}.{" "}
+              {closeReport.lastPrintError ?? "Stampa non completata."}
+            </p>
+          </div>
+          <button
+            className="button button-secondary"
+            disabled={!canWrite || busy}
+            onClick={() => void reprintSummary()}
+          >
+            {busy ? "Invio…" : "Ristampa riepilogo"}
+          </button>
+        </section>
+      )}
+
       {service && confirmClose && (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <section className="service-close-modal">
@@ -124,6 +178,10 @@ export function ServiceControl({
             <p>
               La chiusura sicura verifica prima ordini e job di stampa. Nessun
               ordine aperto verrà chiuso automaticamente.
+            </p>
+            <p>
+              Al termine verrà salvato il riepilogo per tavolo e asporti e ne
+              verrà stampata una sola copia.
             </p>
             {blockers && (
               <div className="service-blockers" role="status">
@@ -168,7 +226,7 @@ export function ServiceControl({
                 disabled={!canWrite || busy}
                 onClick={() => void close(false)}
               >
-                {busy ? "Verifica…" : "Esegui chiusura sicura"}
+                {busy ? "Chiusura…" : "Chiudi e stampa 1 copia"}
               </button>
               {blockers &&
                 countValues(blockers.orders) > 0 &&
@@ -202,6 +260,7 @@ export function ServiceControl({
     });
     if (error) {
       if (!error.code) markUnreliable();
+      setMessageTone("error");
       setMessage(error.message);
     } else {
       await onChanged();
@@ -217,6 +276,7 @@ export function ServiceControl({
     );
     if (error) {
       if (!error.code) markUnreliable();
+      setMessageTone("error");
       setMessage(error.message);
       return;
     }
@@ -232,20 +292,93 @@ export function ServiceControl({
     if (!service || !canWrite || busy) return;
     setBusy(true);
     setMessage("");
-    const { error } = await createClient().rpc("close_service", {
-      p_service_id: service.id,
-      p_force: force,
-      p_reason: force ? forceReason.trim() : null,
-    });
-    if (error) {
-      if (!error.code) markUnreliable();
-      setMessage(error.message);
+    try {
+      const response = await fetch("/api/close-service", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "close",
+          serviceId: service.id,
+          force,
+          reason: force ? forceReason.trim() : null,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        closed?: boolean;
+        error?: string;
+        report?: CloseReportNotice;
+        print?: { status: CloseReportNotice["printStatus"]; message: string };
+      };
+      if (payload.report) setCloseReport(payload.report);
+      if (payload.closed) {
+        setMessageTone(
+          payload.print?.status === "submitted" && !payload.error
+            ? "success"
+            : "error",
+        );
+        setMessage(payload.print?.message ?? payload.error ?? "Servizio chiuso");
+        setConfirmClose(false);
+        await onChanged();
+      } else if (!response.ok) {
+        if (response.status >= 500) markUnreliable();
+        setMessageTone("error");
+        setMessage(payload.error ?? "Chiusura servizio non riuscita");
+        await loadBlockers();
+      }
+    } catch (error) {
+      markUnreliable();
+      setMessageTone("error");
+      setMessage(
+        error instanceof Error ? error.message : "Server non raggiungibile",
+      );
       await loadBlockers();
-    } else {
-      setConfirmClose(false);
-      await onChanged();
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
+  }
+
+  async function reprintSummary() {
+    if (!closeReport || !canWrite || busy) return;
+    if (
+      ["pending", "uncertain"].includes(closeReport.printStatus) &&
+      !window.confirm(
+        "Controlla prima che il riepilogo non sia già uscito. Vuoi inviare una nuova copia?",
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/close-service", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "reprint",
+          serviceId: closeReport.serviceId,
+          actionKey: crypto.randomUUID(),
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        report?: CloseReportNotice;
+        print?: { status: CloseReportNotice["printStatus"]; message: string };
+      };
+      if (payload.report) setCloseReport(payload.report);
+      setMessageTone(
+        response.ok && payload.print?.status === "submitted" ? "success" : "error",
+      );
+      setMessage(payload.print?.message ?? payload.error ?? "Ristampa non riuscita");
+      if (!response.ok && response.status >= 500) markUnreliable();
+    } catch (error) {
+      markUnreliable();
+      setMessageTone("error");
+      setMessage(
+        error instanceof Error ? error.message : "Server non raggiungibile",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 }
 
@@ -262,4 +395,19 @@ function formatCounts(counts: Record<string, number>) {
   return entries.length
     ? entries.map(([status, count]) => `${status} ${count}`).join(", ")
     : "nessuno";
+}
+
+function formatBusinessDate(value: string) {
+  return new Intl.DateTimeFormat("it-IT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(new Date(`${value}T12:00:00`));
+}
+
+function formatMoney(value: number) {
+  return new Intl.NumberFormat("it-IT", {
+    style: "currency",
+    currency: "EUR",
+  }).format(value);
 }
