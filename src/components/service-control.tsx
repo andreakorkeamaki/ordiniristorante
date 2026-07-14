@@ -14,7 +14,7 @@ interface CloseReportNotice {
   businessDate: string;
   period: ServicePeriod;
   total: number;
-  printStatus: "pending" | "submitted" | "failed" | "uncertain";
+  printStatus: "pending" | "submitted" | "failed" | "uncertain" | "skipped";
   lastPrintError: string | null;
 }
 
@@ -149,7 +149,9 @@ export function ServiceControl({
         </div>
       </section>
 
-      {!service && closeReport && closeReport.printStatus !== "submitted" && (
+      {!service &&
+        closeReport &&
+        ["pending", "failed", "uncertain"].includes(closeReport.printStatus) && (
         <section className="service-summary-print-alert" role="status">
           <div>
             <strong>Riepilogo di fine servizio da verificare</strong>
@@ -160,13 +162,22 @@ export function ServiceControl({
               {closeReport.lastPrintError ?? "Stampa non completata."}
             </p>
           </div>
-          <button
-            className="button button-secondary"
-            disabled={!canWrite || busy}
-            onClick={() => void reprintSummary()}
-          >
-            {busy ? "Invio…" : "Ristampa riepilogo"}
-          </button>
+          <div className="service-summary-actions">
+            <button
+              className="button button-secondary"
+              disabled={!canWrite || busy}
+              onClick={() => void skipSummary()}
+            >
+              Archivia senza stampare
+            </button>
+            <button
+              className="button button-secondary"
+              disabled={!canWrite || busy}
+              onClick={() => void reprintSummary()}
+            >
+              {busy ? "Invio…" : "Ristampa riepilogo"}
+            </button>
+          </div>
         </section>
       )}
 
@@ -370,6 +381,51 @@ export function ServiceControl({
       );
       setMessage(payload.print?.message ?? payload.error ?? "Ristampa non riuscita");
       if (!response.ok && response.status >= 500) markUnreliable();
+    } catch (error) {
+      markUnreliable();
+      setMessageTone("error");
+      setMessage(
+        error instanceof Error ? error.message : "Server non raggiungibile",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function skipSummary() {
+    if (!closeReport || !canWrite || busy) return;
+    if (
+      !window.confirm(
+        "Il riepilogo resterà salvato, ma non verrà stampato e questo avviso verrà archiviato. Continuare?",
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/close-service", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "skip",
+          serviceId: closeReport.serviceId,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        report?: CloseReportNotice;
+        print?: { status: CloseReportNotice["printStatus"]; message: string };
+      };
+      if (response.ok && payload.print?.status === "skipped") {
+        setCloseReport(null);
+        setMessageTone("success");
+        setMessage(payload.print.message);
+      } else {
+        setMessageTone("error");
+        setMessage(payload.error ?? "Archiviazione del riepilogo non riuscita");
+        if (response.status >= 500) markUnreliable();
+      }
     } catch (error) {
       markUnreliable();
       setMessageTone("error");
