@@ -1729,6 +1729,12 @@ code {
   font-size: 0.78rem;
 }
 
+.service-summary-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.5rem;
+}
+
 .cashier-filters {
   display: flex;
   gap: 0.5rem;
@@ -3120,6 +3126,10 @@ code {
   .staff-service-status,
   .service-summary-print-alert {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .service-summary-actions {
     flex-direction: column;
   }
 

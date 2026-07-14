@@ -36,6 +36,10 @@ const bodySchema = z.discriminatedUnion("action", [
     serviceId: z.uuid(),
     actionKey: z.uuid(),
   }),
+  z.object({
+    action: z.literal("skip"),
+    serviceId: z.uuid(),
+  }),
 ]);
 
 export async function GET() {
@@ -57,6 +61,7 @@ export async function GET() {
   const { data, error } = await admin
     .from("service_close_reports")
     .select("*")
+    .in("print_status", ["pending", "failed", "uncertain"])
     .order("closed_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -100,6 +105,60 @@ export async function POST(request: Request) {
     return dispatchReport(admin, reportResult.report, {
       actionKey: parsed.data.actionKey,
       automatic: false,
+    });
+  }
+
+  if (parsed.data.action === "skip") {
+    const reportResult = await loadReport(admin, parsed.data.serviceId);
+    if (!reportResult.ok) return reportResult.response;
+    if (reportResult.report.print_status === "submitted") {
+      return NextResponse.json(
+        { error: "Il riepilogo risulta già inviato in stampa" },
+        { status: 409 },
+      );
+    }
+    if (reportResult.report.print_status === "skipped") {
+      return NextResponse.json({
+        closed: true,
+        report: publicReport(reportResult.report),
+        print: {
+          status: "skipped",
+          message: "Riepilogo già archiviato senza stampa",
+        },
+      });
+    }
+    const { data: skipped, error: skipError } = await admin
+      .from("service_close_reports")
+      .update({
+        print_status: "skipped",
+        last_print_error: null,
+      })
+      .eq("id", reportResult.report.id)
+      .in("print_status", ["pending", "failed", "uncertain"])
+      .select("*")
+      .maybeSingle();
+    if (skipError) {
+      return NextResponse.json(
+        { error: "Archiviazione del riepilogo non riuscita" },
+        { status: 503 },
+      );
+    }
+    if (!skipped) {
+      return NextResponse.json(
+        {
+          error:
+            "Lo stato del riepilogo è cambiato. Aggiorna la pagina prima di riprovare.",
+        },
+        { status: 409 },
+      );
+    }
+    return NextResponse.json({
+      closed: true,
+      report: publicReport(skipped as ServiceCloseReport),
+      print: {
+        status: "skipped",
+        message: "Riepilogo archiviato senza stampa",
+      },
     });
   }
 

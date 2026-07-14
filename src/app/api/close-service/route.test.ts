@@ -272,6 +272,49 @@ describe("/api/close-service", () => {
     );
   });
 
+  it("archivia il riepilogo senza stampare e senza riaprire il servizio", async () => {
+    const { getReport } = adminMock(savedReport());
+
+    const response = await POST(
+      request({ action: "skip", serviceId: service.id }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      closed: true,
+      report: { printStatus: "skipped" },
+      print: {
+        status: "skipped",
+        message: "Riepilogo archiviato senza stampa",
+      },
+    });
+    expect(mocks.createClient).not.toHaveBeenCalled();
+    expect(mocks.getPrinterAvailability).not.toHaveBeenCalled();
+    expect(mocks.createPrintNodeJob).not.toHaveBeenCalled();
+    expect(getReport()).toMatchObject({
+      print_status: "skipped",
+      last_print_error: null,
+    });
+  });
+
+  it("non archivia un riepilogo già inviato in stampa", async () => {
+    const { getReport } = adminMock(
+      savedReport({ print_status: "submitted", printnode_job_id: 321 }),
+    );
+
+    const response = await POST(
+      request({ action: "skip", serviceId: service.id }),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "Il riepilogo risulta già inviato in stampa",
+    });
+    expect(getReport()).toMatchObject({ print_status: "submitted" });
+    expect(mocks.createPrintNodeJob).not.toHaveBeenCalled();
+  });
+
   it("recupera dopo refresh l'ultimo riepilogo non stampato", async () => {
     adminMock(savedReport());
 

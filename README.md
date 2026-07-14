@@ -196,6 +196,9 @@ La chiusura servizio prova prima la modalità sicura. Ordini aperti e job
 operativi vengono conteggiati; job `printing` o `uncertain` bloccano anche la
 modalità forzata. La forzatura richiede conferma rafforzata e motivazione
 persistita, e non annulla localmente job che PrintNode potrebbe avere accettato.
+Il riepilogo finale resta salvato anche se la stampante è offline: dalla cassa si
+può ristamparlo oppure archiviarlo esplicitamente senza stampa, senza lasciare
+l'avviso aperto nei servizi successivi.
 
 ## Verifiche
 

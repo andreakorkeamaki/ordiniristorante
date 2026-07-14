@@ -108,7 +108,8 @@ export type ServiceCloseReportPrintStatus =
   | "pending"
   | "submitted"
   | "failed"
-  | "uncertain";
+  | "uncertain"
+  | "skipped";
 
 export interface ServiceCloseSummaryRow {
   kind: OrderType;
