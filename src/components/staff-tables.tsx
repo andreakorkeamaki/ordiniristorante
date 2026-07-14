@@ -11,6 +11,7 @@ import {
   isPreviousService,
 } from "@/lib/service-management";
 import { createClient } from "@/lib/supabase/client";
+import { sortTablesByActivity } from "@/lib/table-ordering";
 import { useCurrentService } from "@/hooks/use-current-service";
 import type {
   Order,
@@ -30,6 +31,7 @@ export function StaffTables({ profile }: { profile: Profile }) {
   const [tables, setTables] = useState<RestaurantTable[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
+  const [sortActiveTablesFirst, setSortActiveTablesFirst] = useState(true);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [reprintTarget, setReprintTarget] = useState<Order | null>(null);
@@ -61,12 +63,20 @@ export function StaffTables({ profile }: { profile: Profile }) {
       .select("*")
       .eq("order_type", "dine_in")
       .in("status", [...ACTIVE_ORDER_STATUSES]);
-    const [tablesResult, ordersResult, profilesResult] = await Promise.all([
+    const [tablesResult, ordersResult, profilesResult, settingsResult] = await Promise.all([
       supabase.from("restaurant_tables").select("*").eq("active", true).order("table_number"),
       ordersQuery,
       supabase.from("profiles").select("id, full_name, role, active").eq("active", true),
+      supabase
+        .from("restaurant_settings")
+        .select("sort_active_tables_first")
+        .single(),
     ]);
-    const error = tablesResult.error ?? ordersResult.error ?? profilesResult.error;
+    const error =
+      tablesResult.error ??
+      ordersResult.error ??
+      profilesResult.error ??
+      settingsResult.error;
     if (error) {
       if (!error.code) markUnreliable();
       if (generation !== loadGeneration.current) return;
@@ -90,6 +100,10 @@ export function StaffTables({ profile }: { profile: Profile }) {
         ((profilesResult.data ?? []) as Profile[]).map((profile) => [profile.id, profile]),
       ),
     );
+    setSortActiveTablesFirst(
+      (settingsResult.data as { sort_active_tables_first: boolean })
+        .sort_active_tables_first,
+    );
     hasSnapshot.current = true;
     setLoadError("");
     setDataState("ready");
@@ -103,6 +117,7 @@ export function StaffTables({ profile }: { profile: Profile }) {
       .channel("staff-tables")
       .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, load)
       .on("postgres_changes", { event: "*", schema: "public", table: "restaurant_tables" }, load)
+      .on("postgres_changes", { event: "*", schema: "public", table: "restaurant_settings" }, load)
       .subscribe();
     return () => {
       void supabase.removeChannel(channel);
@@ -117,10 +132,17 @@ export function StaffTables({ profile }: { profile: Profile }) {
     ),
     [orders],
   );
-  const filtered = tables.filter((table) =>
-    `${table.table_number} ${table.display_name ?? ""}`
-      .toLowerCase()
-      .includes(query.toLowerCase()),
+  const visibleTables = useMemo(
+    () => sortTablesByActivity(
+      tables.filter((table) =>
+        `${table.table_number} ${table.display_name ?? ""}`
+          .toLowerCase()
+          .includes(query.toLowerCase()),
+      ),
+      new Set(orderByTable.keys()),
+      sortActiveTablesFirst,
+    ),
+    [orderByTable, query, sortActiveTablesFirst, tables],
   );
   if ((loading || serviceLoading) && dataState === "loading") {
     return <div className="loader" aria-label="Caricamento tavoli" />;
@@ -183,7 +205,7 @@ export function StaffTables({ profile }: { profile: Profile }) {
       )}
 
       <section className="tables-grid" aria-label="Elenco tavoli">
-        {filtered.map((table) => {
+        {visibleTables.map((table) => {
           const order = orderByTable.get(table.id);
           const updater = order ? profiles.get(order.updated_by) : null;
           return (
@@ -371,7 +393,9 @@ function TableCard({
     : false;
 
   return (
-    <article className={`table-card status-${order?.status ?? "free"}`}>
+    <article
+      className={`table-card status-${order?.status ?? "free"}${order ? " is-active" : ""}`}
+    >
       <Link className="table-card-link" href={`/staff/table/${table.id}`}>
         {content}
       </Link>

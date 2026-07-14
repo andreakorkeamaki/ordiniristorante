@@ -5,6 +5,7 @@ export const DEFAULT_SETTINGS = {
   dine_in_print_copies: 3,
   takeaway_print_copies: 3,
   order_ticket_print_mode: "department_split",
+  sort_active_tables_first: true,
   allergen_notice:
     "Per allergie o intolleranze chiedi informazioni al personale prima di ordinare.",
   allergen_notice_en:
