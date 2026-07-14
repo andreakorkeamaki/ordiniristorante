@@ -1,41 +1,15 @@
 "use client";
 
 import { useEffect } from "react";
-import { PrintTicket } from "@/components/print-ticket";
-import { aggregatePreparationOrderItems } from "@/lib/order-items";
-import { buildSamplePrintOrder } from "@/lib/print-test-order";
-import { groupOrderItemsByPrintDepartment } from "@/lib/print-ticket-format";
-import type { OrderTicketPrintMode } from "@/types/domain";
+import type { EscPosPreviewTicket } from "@/lib/esc-pos-preview";
 
 export function BrowserTestPrint({
   autoPrint,
-  mode,
+  tickets,
 }: {
   autoPrint: boolean;
-  mode: OrderTicketPrintMode;
+  tickets: EscPosPreviewTicket[];
 }) {
-  const order = buildSamplePrintOrder();
-  const departments =
-    mode === "department_split"
-      ? groupOrderItemsByPrintDepartment(order.items ?? [])
-      : [
-          {
-            area: "cassa" as const,
-            label: "COMANDA COMPLETA",
-            items: aggregatePreparationOrderItems(order.items ?? []),
-          },
-          {
-            area: "cassa" as const,
-            label: "COMANDA COMPLETA",
-            items: aggregatePreparationOrderItems(order.items ?? []),
-          },
-          {
-            area: "cassa" as const,
-            label: "COMANDA COMPLETA",
-            items: aggregatePreparationOrderItems(order.items ?? []),
-          },
-        ];
-
   useEffect(() => {
     if (!autoPrint) return;
     const id = window.setTimeout(() => window.print(), 250);
@@ -48,20 +22,24 @@ export function BrowserTestPrint({
         <div>
           <p className="eyebrow">Prova browser</p>
           <h1>Comanda campione</h1>
-          <p>Anteprima 80 mm per la finestra di stampa del browser.</p>
+          <p>Simulazione 80 mm generata dall’uscita ESC/POS di PrintNode.</p>
         </div>
         <button className="button button-primary" onClick={() => window.print()}>
           Stampa dal browser
         </button>
       </div>
       <div className="ticket-preview print-area">
-        {departments.map((department, index) => (
-          <PrintTicket
-            department={department}
-            key={`${department.area}-${index}`}
-            label="PROVA STAMPA"
-            order={order}
-          />
+        {tickets.map((ticket, ticketIndex) => (
+          <article className="ticket ticket-esc-pos" key={ticketIndex}>
+            {ticket.lines.map((line, lineIndex) => (
+              <p
+                className={`ticket-esc-line ticket-align-${line.alignment} ticket-height-${line.heightScale} ticket-width-${line.widthScale}`}
+                key={lineIndex}
+              >
+                {line.text || "\u00a0"}
+              </p>
+            ))}
+          </article>
         ))}
       </div>
     </section>

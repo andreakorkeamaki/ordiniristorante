@@ -78,8 +78,18 @@ describe("buildRaw80mmTicket", () => {
     const ticket = buildRaw80mmTicket(order, "new_order");
 
     expect(ticket.includes(Buffer.from([0x1d, 0x21, 0x11]))).toBe(true);
-    expect(ticket.includes(Buffer.from([0x1d, 0x21, 0x00]))).toBe(false);
+    expect(ticket.includes(Buffer.from([0x1d, 0x21, 0x22]))).toBe(true);
     expect(ticket.toString("ascii")).toContain("-".repeat(24));
+  });
+
+  it("stampa gli extra più grandi e poi ripristina la dimensione della comanda", () => {
+    const ticket = buildRaw80mmTicket(order, "new_order");
+
+    expect(ticket.includes(Buffer.concat([
+      Buffer.from([0x1d, 0x21, 0x22]),
+      Buffer.from("+ 1x Mozzarella\n", "ascii"),
+      Buffer.from([0x1d, 0x21, 0x11]),
+    ]))).toBe(true);
   });
 
   it("renders an 80 mm ESC/POS reprint ticket with the required label", () => {
@@ -275,6 +285,7 @@ describe("buildRaw80mmTicket", () => {
     expect(copies).toHaveLength(3);
     expect(copies[0]).toContain("COPIA PIZZERIA");
     expect(copies[0]).toContain("1R Pinsa Margherita");
+    expect(copies[0]).toContain("+ Mozzarella");
     expect(copies[0]).toContain("2 AYCE Adulti");
     expect(copies[0]).toContain("Nota: Domanda giro");
     expect(copies[0]).not.toContain("2R AYCE");

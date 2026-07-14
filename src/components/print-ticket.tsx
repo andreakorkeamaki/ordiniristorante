@@ -34,7 +34,9 @@ export function PrintTicket({
             <p><strong>{item.quantity}×</strong> {formatPrintItemName(item)}</p>
             {item.notes && <small>— {item.notes}</small>}
             {item.extras.map((extra) => (
-              <small key={extra.id}>+ {extra.quantity}× {extra.extra_name_snapshot}</small>
+              <strong className="ticket-extra" key={extra.id}>
+                + {extra.quantity}× {extra.extra_name_snapshot}
+              </strong>
             ))}
           </div>
         ))}

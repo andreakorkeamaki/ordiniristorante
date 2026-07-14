@@ -444,6 +444,10 @@ export function AdminDashboard() {
                 ),
               )}
             </div>
+            <p className="settings-print-preview-note">
+              Lo schema qui sotto è indicativo. “Stampa browser” simula invece
+              l’uscita ESC/POS effettivamente inviata a PrintNode.
+            </p>
             <PrintModePreview mode={printModePreview} />
             <div className="print-test-actions">
               <button
