@@ -1083,11 +1083,42 @@ code {
   box-shadow: var(--shadow);
 }
 
-.table-card.status-draft { border-top-color: var(--amber); }
-.table-card.status-pending_cashier { border-top-color: var(--red); }
-.table-card.status-confirmed { border-top-color: var(--blue); }
-.table-card.status-in_preparation { border-top-color: var(--green); }
-.table-card.status-bill_requested { border-top-color: #795289; }
+.table-card.status-draft {
+  --table-status-color: var(--amber);
+  --table-status-background: #fff6df;
+  border-top-color: var(--amber);
+}
+
+.table-card.status-pending_cashier {
+  --table-status-color: var(--red);
+  --table-status-background: #fff0ed;
+  border-top-color: var(--red);
+}
+
+.table-card.status-confirmed {
+  --table-status-color: var(--blue);
+  --table-status-background: #edf5ff;
+  border-top-color: var(--blue);
+}
+
+.table-card.status-in_preparation {
+  --table-status-color: var(--green);
+  --table-status-background: #edf8ef;
+  border-top-color: var(--green);
+}
+
+.table-card.status-bill_requested {
+  --table-status-color: #795289;
+  --table-status-background: #f7effa;
+  border-top-color: #795289;
+}
+
+.table-card.is-active {
+  border-color: var(--table-status-color);
+  border-top-width: 4px;
+  background: var(--table-status-background);
+  box-shadow: 0 7px 22px rgb(45 31 18 / 14%);
+}
 
 .table-card-top {
   display: flex;
@@ -2541,6 +2572,79 @@ code {
   max-width: 42rem;
   gap: 1rem;
   padding: 0 1rem 1rem;
+}
+
+.settings-form .settings-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.settings-switch-copy {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.settings-switch-copy small {
+  color: var(--muted);
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.settings-switch-control {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.settings-form .settings-switch-control input {
+  position: absolute;
+  width: 1px;
+  min-height: 0;
+  height: 1px;
+  padding: 0;
+  opacity: 0;
+}
+
+.settings-switch-control > span {
+  position: relative;
+  display: block;
+  width: 3.2rem;
+  height: 1.8rem;
+  border-radius: 999px;
+  background: #cfc5b9;
+  transition: background 150ms ease;
+}
+
+.settings-switch-control > span::after {
+  position: absolute;
+  top: 0.2rem;
+  left: 0.2rem;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 6px rgb(45 31 18 / 22%);
+  content: "";
+  transition: transform 150ms ease;
+}
+
+.settings-switch-control input:checked + span {
+  background: var(--green);
+}
+
+.settings-switch-control input:checked + span::after {
+  transform: translateX(1.4rem);
+}
+
+.settings-switch-control input:focus-visible + span {
+  outline: 3px solid rgb(142 33 29 / 18%);
+  outline-offset: 2px;
 }
 
 .department-print-setting {

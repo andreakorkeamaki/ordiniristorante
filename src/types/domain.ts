@@ -33,6 +33,7 @@ export interface RestaurantSettings {
   dine_in_print_copies: number;
   takeaway_print_copies: number;
   order_ticket_print_mode: OrderTicketPrintMode;
+  sort_active_tables_first: boolean;
   allergen_notice: string | null;
   allergen_notice_en: string | null;
   ticket_footer: string | null;

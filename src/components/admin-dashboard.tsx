@@ -392,6 +392,23 @@ export function AdminDashboard() {
           <div className="panel-title"><div><p className="eyebrow">Locale</p><h2>Impostazioni</h2></div></div>
           <label>Nome locale<input name="restaurant_name" defaultValue={settings.restaurant_name} required /></label>
           <label>Coperto<input name="cover_charge" type="number" min="0" step="0.01" defaultValue={settings.cover_charge} required /></label>
+          <label className="settings-switch">
+            <span className="settings-switch-copy">
+              <strong>Tavoli attivi per primi</strong>
+              <small>
+                Sposta in cima i tavoli con una comanda aperta. Se disattivato,
+                resta il normale ordine numerico.
+              </small>
+            </span>
+            <span className="settings-switch-control">
+              <input
+                defaultChecked={settings.sort_active_tables_first}
+                name="sort_active_tables_first"
+                type="checkbox"
+              />
+              <span aria-hidden="true" />
+            </span>
+          </label>
           <div className="department-print-setting">
             <div>
               <strong>Tipo comande</strong>
@@ -613,6 +630,7 @@ export function AdminDashboard() {
     await execute(() => createClient().from("restaurant_settings").update({
       restaurant_name: String(data.get("restaurant_name")),
       cover_charge: Number(data.get("cover_charge")),
+      sort_active_tables_first: data.has("sort_active_tables_first"),
       allergen_notice: String(data.get("allergen_notice")) || null,
       ticket_footer: String(data.get("ticket_footer")) || null,
       order_ticket_print_mode: normalizePrintMode(
