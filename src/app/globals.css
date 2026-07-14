@@ -2328,6 +2328,14 @@ code {
   margin-left: 1.2rem;
 }
 
+.ticket-extra {
+  display: block;
+  margin: 0.25rem 0 0.25rem 1.2rem;
+  font-size: 1.05rem;
+  font-weight: 900;
+  line-height: 1.15;
+}
+
 .ticket-summary {
   font-weight: 800;
 }
@@ -2336,6 +2344,61 @@ code {
   padding-top: 0.8rem;
   font-weight: 900;
   text-align: center;
+}
+
+.ticket-esc-pos {
+  width: 72mm;
+  min-width: 72mm;
+  padding: 0;
+  overflow: hidden;
+  font-family: "Courier New", Courier, monospace;
+}
+
+.ticket-esc-line {
+  margin: 0;
+  white-space: pre;
+  transform-origin: left center;
+}
+
+.ticket-height-1 {
+  font-size: 7pt;
+  line-height: 3mm;
+}
+
+.ticket-height-2 {
+  font-size: 14pt;
+  line-height: 6mm;
+}
+
+.ticket-height-3 {
+  font-size: 21pt;
+  line-height: 9mm;
+}
+
+.ticket-width-1 {
+  width: 100%;
+}
+
+.ticket-width-2 {
+  width: 50%;
+  transform: scaleX(2);
+}
+
+.ticket-width-3 {
+  width: 33.3333%;
+  transform: scaleX(3);
+}
+
+.ticket-align-center {
+  margin-inline: auto;
+  text-align: center;
+  transform-origin: center;
+}
+
+.ticket-align-right {
+  margin-left: auto;
+  text-align: right;
+  transform-origin: right center;
 }
 
 .modal-actions {
@@ -2695,6 +2758,13 @@ code {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
   gap: 0.6rem;
+}
+
+.settings-print-preview-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
 
 .settings-ticket-preview pre {
@@ -3267,6 +3337,10 @@ code {
     padding: 0;
     break-after: page;
     font-size: 10pt;
+  }
+
+  .ticket-esc-pos {
+    font-size: initial;
   }
 }
 

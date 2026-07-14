@@ -20,6 +20,8 @@ export const PRINT_JOB_LABELS: Record<PrintJobType, string> = {
 
 const LINE_WIDTH = 24;
 const DOUBLE_TEXT_SIZE = Buffer.from([0x1d, 0x21, 0x11]);
+const EXTRA_TEXT_SIZE = Buffer.from([0x1d, 0x21, 0x22]);
+const EXTRA_LINE_WIDTH = 16;
 const CUT = Buffer.from([0x1d, 0x56, 0x41, 0x10]);
 
 function ascii(value: string) {
@@ -143,9 +145,11 @@ function addPreparationLines(chunks: Buffer[], items: OrderItem[]) {
     for (const wrappedLine of wrap(line)) chunks.push(text(wrappedLine));
 
     for (const extra of item.extras ?? []) {
-      for (const wrappedLine of wrap(`  + ${extra.extra_name_snapshot}`)) {
+      chunks.push(EXTRA_TEXT_SIZE);
+      for (const wrappedLine of wrap(`+ ${extra.extra_name_snapshot}`, EXTRA_LINE_WIDTH)) {
         chunks.push(text(wrappedLine));
       }
+      chunks.push(DOUBLE_TEXT_SIZE);
     }
     if (item.notes) {
       for (const wrappedLine of wrap(`  Nota: ${item.notes}`)) {
@@ -255,9 +259,14 @@ export function buildRaw80mmTicket(order: Order, jobType: PrintJobType) {
         for (const line of wrap(`  NOTA: ${item.notes}`)) chunks.push(text(line));
       }
       for (const extra of item.extras ?? []) {
-        for (const line of wrap(`  + ${extra.quantity}x ${extra.extra_name_snapshot}`)) {
+        chunks.push(EXTRA_TEXT_SIZE);
+        for (const line of wrap(
+          `+ ${extra.quantity}x ${extra.extra_name_snapshot}`,
+          EXTRA_LINE_WIDTH,
+        )) {
           chunks.push(text(line));
         }
+        chunks.push(DOUBLE_TEXT_SIZE);
       }
     }
     chunks.push(text(""));
