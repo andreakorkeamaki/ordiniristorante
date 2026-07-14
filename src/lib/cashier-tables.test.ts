@@ -35,7 +35,7 @@ function order(overrides: Partial<Order> & Pick<Order, "id" | "table_id" | "stat
 }
 
 describe("buildCashierTableRows", () => {
-  it("mantiene tutti i tavoli, con gli attivi prima dei chiusi", () => {
+  it("mostra solo i tavoli usati nel servizio corrente, con gli attivi prima dei chiusi", () => {
     const rows = buildCashierTableRows(
       tables,
       [
@@ -45,11 +45,9 @@ describe("buildCashierTableRows", () => {
       serviceId,
     );
 
-    expect(rows.map((row) => row.table.table_number)).toEqual([3, 1, 2]);
+    expect(rows.map((row) => row.table.table_number)).toEqual([3, 2]);
     expect(rows[0].activeOrder?.status).toBe("confirmed");
-    expect(rows[1].activeOrder).toBeNull();
-    expect(rows[1].closedOrder).toBeNull();
-    expect(rows[2].closedOrder?.status).toBe("closed");
+    expect(rows[1].closedOrder?.status).toBe("closed");
   });
 
   it("usa solo l'ultima chiusura del servizio corrente", () => {
@@ -80,5 +78,22 @@ describe("buildCashierTableRows", () => {
     );
 
     expect(row.closedOrder?.id).toBe(latestCurrentOrder.id);
+  });
+
+  it("nasconde anche un tavolo attivo appartenente a un altro servizio", () => {
+    const rows = buildCashierTableRows(
+      [tables[0]],
+      [
+        order({
+          id: "order-old-active",
+          table_id: tables[0].id,
+          status: "confirmed",
+          service_id: "00000000-0000-4000-8000-000000000099",
+        }),
+      ],
+      serviceId,
+    );
+
+    expect(rows).toEqual([]);
   });
 });
