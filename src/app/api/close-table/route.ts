@@ -40,6 +40,12 @@ const bodySchema = z.discriminatedUnion("action", [
     reason: z.string().trim().min(10).max(500),
   }),
   z.object({
+    action: z.literal("reprint"),
+    orderId: z.uuid(),
+    actionKey: z.uuid(),
+    reason: z.string().trim().min(10).max(500),
+  }),
+  z.object({
     action: z.literal("manual_confirm"),
     orderId: z.uuid(),
     jobId: z.uuid(),
@@ -100,7 +106,8 @@ export async function POST(request: Request) {
     );
   }
   const order = orderResult.order;
-  if (order.status === "closed") {
+  const isReceiptReprint = parsed.data.action === "reprint";
+  if (order.status === "closed" && !isReceiptReprint) {
     return NextResponse.json({ closed: true, idempotent: true, copies: 1 });
   }
   if (order.status === "cancelled") {
@@ -108,6 +115,13 @@ export async function POST(request: Request) {
       order_id: order.id,
       actor_id: profile.id,
       technical_error: "Order cancelled",
+    });
+  }
+  if (isReceiptReprint && order.status !== "closed") {
+    return failure("invalid_state", 409, startedAt, {
+      order_id: order.id,
+      actor_id: profile.id,
+      technical_error: "Receipt reprint requested for an open order",
     });
   }
 
@@ -141,7 +155,13 @@ export async function POST(request: Request) {
   }
 
   const { data: receiptData, error: receiptError } =
-    parsed.data.action === "dispatch" && parsed.data.jobId
+    parsed.data.action === "reprint"
+      ? await supabase.rpc("request_receipt_reprint", {
+          p_order_id: order.id,
+          p_action_key: parsed.data.actionKey,
+          p_reason: parsed.data.reason,
+        })
+      : parsed.data.action === "dispatch" && parsed.data.jobId
       ? await supabase
           .from("print_jobs")
           .select("*")
@@ -173,17 +193,23 @@ export async function POST(request: Request) {
   }
 
   if (job.status === "printed") {
-    const closeResult = await closeConfirmedReceipt(supabase, order);
-    return receiptResponse(closeResult, job, startedAt, profile.id, true);
+    const current = await settleReceiptOrder(supabase, order, !isReceiptReprint);
+    return receiptResponse(current, job, startedAt, profile.id, {
+      idempotent: true,
+      reprint: isReceiptReprint,
+    });
   }
 
   if (job.printnode_job_id) {
     job = await reconcileReceipt(admin, job, profile.id);
     const current =
       job.status === "printed"
-        ? await closeConfirmedReceipt(supabase, order)
+        ? await settleReceiptOrder(supabase, order, !isReceiptReprint)
         : await loadCurrentOrder(supabase, order.id);
-    return receiptResponse(current, job, startedAt, profile.id, true);
+    return receiptResponse(current, job, startedAt, profile.id, {
+      idempotent: true,
+      reprint: isReceiptReprint,
+    });
   }
 
   if (job.status === "printing") {
@@ -202,9 +228,12 @@ export async function POST(request: Request) {
       if (saved) job = await reconcileReceipt(admin, saved, profile.id);
       const current =
         job.status === "printed"
-          ? await closeConfirmedReceipt(supabase, order)
+          ? await settleReceiptOrder(supabase, order, !isReceiptReprint)
           : await loadCurrentOrder(supabase, order.id);
-      return receiptResponse(current, job, startedAt, profile.id, true);
+      return receiptResponse(current, job, startedAt, profile.id, {
+        idempotent: true,
+        reprint: isReceiptReprint,
+      });
     }
 
     await markUncertain(
@@ -261,13 +290,19 @@ export async function POST(request: Request) {
     if (job.printnode_job_id) job = await reconcileReceipt(admin, job, profile.id);
     const current =
       job.status === "printed"
-        ? await closeConfirmedReceipt(supabase, order)
+        ? await settleReceiptOrder(supabase, order, !isReceiptReprint)
         : await loadCurrentOrder(supabase, order.id);
-    return receiptResponse(current, job, startedAt, profile.id, true);
+    return receiptResponse(current, job, startedAt, profile.id, {
+      idempotent: true,
+      reprint: isReceiptReprint,
+    });
   }
   if (job.printnode_job_id || job.status !== "printing") {
     const current = await loadCurrentOrder(supabase, order.id);
-    return receiptResponse(current, job, startedAt, profile.id, true);
+    return receiptResponse(current, job, startedAt, profile.id, {
+      idempotent: true,
+      reprint: isReceiptReprint,
+    });
   }
 
   try {
@@ -328,9 +363,12 @@ export async function POST(request: Request) {
     job = await reconcileReceipt(admin, saved, profile.id);
     const current =
       job.status === "printed"
-        ? await closeConfirmedReceipt(supabase, order)
+        ? await settleReceiptOrder(supabase, order, !isReceiptReprint)
         : await loadCurrentOrder(supabase, order.id);
-    return receiptResponse(current, job, startedAt, profile.id, submission.recovered);
+    return receiptResponse(current, job, startedAt, profile.id, {
+      idempotent: submission.recovered,
+      reprint: isReceiptReprint,
+    });
   } catch (error) {
     const technicalError =
       error instanceof Error ? error.message : "Unknown PrintNode submission error";
@@ -504,6 +542,16 @@ async function closeConfirmedReceipt(
   return (data as Order | null) ?? loadCurrentOrder(supabase, order.id);
 }
 
+function settleReceiptOrder(
+  supabase: SupabaseClient,
+  order: Order,
+  shouldClose: boolean,
+) {
+  return shouldClose
+    ? closeConfirmedReceipt(supabase, order)
+    : loadCurrentOrder(supabase, order.id);
+}
+
 async function loadCurrentOrder(supabase: SupabaseClient, orderId: string) {
   const { data } = await supabase
     .from("orders")
@@ -518,29 +566,40 @@ function receiptResponse(
   job: PrintJob,
   startedAt: number,
   actorId: string,
-  idempotent: boolean,
+  options: { idempotent: boolean; reprint: boolean },
 ) {
   const closed = order?.status === "closed";
+  const completed = options.reprint ? job.status === "printed" : closed;
+  const outcome = options.reprint && completed
+    ? "reprinted"
+    : closed && !options.reprint
+      ? "closed"
+      : job.status;
   logReceipt("receipt_dispatch_result", startedAt, {
     order_id: job.order_id,
     print_job_id: job.id,
     printnode_job_id: job.printnode_job_id,
     actor_id: actorId,
     attempt: job.retry_count,
-    outcome: closed ? "closed" : job.status,
+    outcome,
   });
   return NextResponse.json(
     {
       closed,
+      reprinted: options.reprint && completed,
       job: safePrintJob(job),
       copies: job.copies,
-      idempotent,
-      outcome: closed ? "closed" : job.status,
-      message: closed
-        ? "Scontrino confermato e ordine chiuso."
-        : "Scontrino preso in carico. Il tavolo resterà aperto fino alla conferma.",
+      idempotent: options.idempotent,
+      outcome,
+      message: options.reprint
+        ? completed
+          ? "Conto finale ristampato in una copia."
+          : "Ristampa del conto finale presa in carico."
+        : closed
+          ? "Scontrino confermato e ordine chiuso."
+          : "Scontrino preso in carico. Il tavolo resterà aperto fino alla conferma.",
     },
-    { status: closed ? 200 : 202 },
+    { status: completed ? 200 : 202 },
   );
 }
 

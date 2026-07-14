@@ -2110,18 +2110,52 @@ code {
   background: var(--red);
 }
 
-.active-table-row {
+.cashier-table-row {
   display: grid;
-  grid-template-columns: minmax(4.5rem, 1fr) auto auto;
+  gap: 0.45rem;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  padding: 0.55rem;
+}
+
+.cashier-table-row.is-active {
+  border-color: #6c9c82;
+  background: #e1f0e7;
+}
+
+.cashier-table-row.is-closed {
+  border-color: #c8796f;
+  background: #f7e1de;
+}
+
+.cashier-table-summary {
+  display: grid;
+  grid-template-columns: minmax(3.5rem, 0.6fr) minmax(7rem, 1fr) auto;
   align-items: center;
   gap: 0.45rem;
   width: 100%;
-  padding: 0.7rem;
-  border: 1px solid var(--line);
-  border-radius: 0.6rem;
-  background: var(--surface);
+  min-height: 2rem;
+  padding: 0.15rem;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
   text-align: left;
   font-size: 0.75rem;
+}
+
+button.cashier-table-summary {
+  cursor: pointer;
+}
+
+.cashier-table-reprint {
+  min-height: 2.1rem;
+  border: 1px solid var(--red);
+  border-radius: 0.45rem;
+  color: #fff;
+  background: var(--red);
+  font-size: 0.68rem;
+  font-weight: 800;
 }
 
 .modal-backdrop {
@@ -3135,7 +3169,8 @@ code {
   .admin-row button,
   .row-actions button,
   .card-actions button,
-  .active-table-row {
+  .cashier-table-summary,
+  .cashier-table-reprint {
     min-height: 2.75rem;
   }
 

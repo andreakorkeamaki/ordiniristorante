@@ -226,6 +226,87 @@ describe("POST /api/close-table", () => {
     expect(payload).toMatchObject({ closed: true, copies: 1 });
   });
 
+  it("ristampa in una copia il conto finale di un ordine già chiuso", async () => {
+    const closedOrder = { ...order, status: "closed" } as Order;
+    const supabase = supabaseMock({ currentOrder: closedOrder });
+    mocks.loadOrderForPrint.mockResolvedValue({ ok: true, order: closedOrder });
+    mocks.createClient.mockResolvedValue(supabase);
+
+    const response = await POST(request({
+      action: "reprint",
+      orderId: order.id,
+      actionKey: "00000000-0000-4000-8000-000000000088",
+      reason: "Ristampa conto finale richiesta dalla cassa",
+    }));
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(supabase.rpc).toHaveBeenCalledWith("request_receipt_reprint", {
+      p_order_id: order.id,
+      p_action_key: "00000000-0000-4000-8000-000000000088",
+      p_reason: "Ristampa conto finale richiesta dalla cassa",
+    });
+    expect(mocks.createPrintNodeJob).toHaveBeenCalledWith(
+      expect.objectContaining({ copies: 1 }),
+    );
+    expect(payload).toMatchObject({
+      closed: true,
+      reprinted: true,
+      outcome: "reprinted",
+      copies: 1,
+    });
+  });
+
+  it("non usa la ristampa del conto finale su un tavolo ancora aperto", async () => {
+    const supabase = supabaseMock();
+    mocks.createClient.mockResolvedValue(supabase);
+
+    const response = await POST(request({
+      action: "reprint",
+      orderId: order.id,
+      actionKey: "00000000-0000-4000-8000-000000000088",
+      reason: "Ristampa conto finale richiesta dalla cassa",
+    }));
+
+    expect(response.status).toBe(409);
+    expect(supabase.rpc).not.toHaveBeenCalledWith(
+      "request_receipt_reprint",
+      expect.anything(),
+    );
+    expect(mocks.createPrintNodeJob).not.toHaveBeenCalled();
+  });
+
+  it("mantiene pending la ristampa del conto se PrintNode non l'ha ancora completata", async () => {
+    const closedOrder = { ...order, status: "closed" } as Order;
+    mocks.loadOrderForPrint.mockResolvedValue({ ok: true, order: closedOrder });
+    mocks.createClient.mockResolvedValue(
+      supabaseMock({ currentOrder: closedOrder, state: "new" }),
+    );
+    mocks.getPrintNodeJobStates.mockResolvedValue([
+      {
+        printJobId: 321,
+        state: "new",
+        message: null,
+        createTimestamp: "2026-07-06T10:01:02.000Z",
+      },
+    ]);
+
+    const response = await POST(request({
+      action: "reprint",
+      orderId: order.id,
+      actionKey: "00000000-0000-4000-8000-000000000089",
+      reason: "Ristampa conto finale richiesta dalla cassa",
+    }));
+    const payload = await response.json();
+
+    expect(response.status).toBe(202);
+    expect(payload).toMatchObject({
+      closed: true,
+      reprinted: false,
+      outcome: "printing",
+    });
+  });
+
   it("non dichiara chiuso un ordine se PrintNode ha solo accettato il job", async () => {
     mocks.getPrintNodeJobStates.mockResolvedValue([
       {

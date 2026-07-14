@@ -5,6 +5,7 @@ import { useConnection } from "@/components/connection-provider";
 import { PrintReceipt } from "@/components/print-receipt";
 import { PrintTicket } from "@/components/print-ticket";
 import { ServiceControl } from "@/components/service-control";
+import { buildCashierTableRows } from "@/lib/cashier-tables";
 import { formatCurrency, formatDateTime, formatTime } from "@/lib/format";
 import { getOrderLocationLabel, getOrderShortLabel } from "@/lib/order-display";
 import {
@@ -77,6 +78,11 @@ type PrintConfirmation =
       order: Order;
       job: PrintJob | null;
       actionKey: string;
+    }
+  | {
+      kind: "receipt-reprint";
+      order: Order;
+      actionKey: string;
     };
 
 export function CashierDashboard() {
@@ -93,6 +99,7 @@ export function CashierDashboard() {
     reload: reloadService,
   } = useCurrentService();
   const [orders, setOrders] = useState<Order[]>([]);
+  const [restaurantTables, setRestaurantTables] = useState<RestaurantTable[]>([]);
   const [jobs, setJobs] = useState<PrintJob[]>([]);
   const [filter, setFilter] = useState("");
   const [waiterFilter, setWaiterFilter] = useState("");
@@ -129,8 +136,9 @@ export function CashierDashboard() {
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
     const supabase = createClient();
-    const [activeOrdersResult, tablesResult, profilesResult, operationalJobsResult, historyJobsResult] = await Promise.all([
+    const [activeOrdersResult, closedOrdersResult, tablesResult, profilesResult, operationalJobsResult, historyJobsResult] = await Promise.all([
       supabase.from("orders").select("*").in("status", ACTIVE).order("created_at"),
+      loadLatestClosedTableOrders(supabase, service?.id ?? null),
       supabase.from("restaurant_tables").select("*"),
       supabase.from("profiles").select("id, full_name, role, active"),
       loadAllOperationalPrintJobs(supabase),
@@ -143,6 +151,7 @@ export function CashierDashboard() {
     ]);
     const firstError =
       activeOrdersResult.error ??
+      closedOrdersResult.error ??
       tablesResult.error ??
       profilesResult.error ??
       operationalJobsResult.error ??
@@ -175,8 +184,13 @@ export function CashierDashboard() {
       return;
     }
     const rawOrders = [
-      ...activeOrders,
-      ...((queuedOrdersResult.data ?? []) as Order[]).filter((order) => !activeIds.has(order.id)),
+      ...new Map(
+        [
+          ...activeOrders,
+          ...((closedOrdersResult.data ?? []) as Order[]),
+          ...((queuedOrdersResult.data ?? []) as Order[]),
+        ].map((order) => [order.id, order]),
+      ).values(),
     ];
     const orderIds = rawOrders.map((order) => order.id);
     const linesResult = orderIds.length
@@ -191,9 +205,8 @@ export function CashierDashboard() {
       return;
     }
     if (generation !== loadGeneration.current) return;
-    const tables = new Map(
-      ((tablesResult.data ?? []) as RestaurantTable[]).map((table) => [table.id, table]),
-    );
+    const loadedTables = (tablesResult.data ?? []) as RestaurantTable[];
+    const tables = new Map(loadedTables.map((table) => [table.id, table]));
     const profiles = new Map(
       ((profilesResult.data ?? []) as Profile[]).map((profile) => [profile.id, profile]),
     );
@@ -207,6 +220,7 @@ export function CashierDashboard() {
         items: lines.filter((line) => line.order_id === order.id),
       })),
     );
+    setRestaurantTables(loadedTables);
     setJobs(rawJobs);
     const historyPage = (historyJobsResult.data ?? []) as PrintJob[];
     setHistoryCursor(historyPage.at(-1)?.created_at ?? null);
@@ -215,7 +229,7 @@ export function CashierDashboard() {
     setLoadError("");
     setDataState("ready");
     setLoading(false);
-  }, [markUnreliable]);
+  }, [markUnreliable, service?.id]);
 
   const refreshPrinter = useCallback(async () => {
     try {
@@ -266,6 +280,10 @@ export function CashierDashboard() {
     [orders],
   );
   const activeOrders = orders.filter((order) => ACTIVE.includes(order.status));
+  const cashierTableRows = useMemo(
+    () => buildCashierTableRows(restaurantTables, orders, service?.id ?? null),
+    [orders, restaurantTables, service?.id],
+  );
   const filtered = useMemo(
     () =>
       activeOrders.filter((order) => {
@@ -653,21 +671,38 @@ export function CashierDashboard() {
             />
           ))}
         </CashierColumn>
-        <CashierColumn title="Ordini attivi" count={filtered.length}>
-          {filtered.map((order) => (
-            <button
-              className="active-table-row"
-              key={order.id}
-              onClick={() => openPreview(order, "new_order")}
+        <CashierColumn title="Tavoli" count={cashierTableRows.length}>
+          {cashierTableRows.map(({ table, activeOrder, closedOrder }) => (
+            <article
+              className={`cashier-table-row ${activeOrder ? "is-active" : "is-closed"}`}
+              key={table.id}
             >
-              <strong>
-                {order.order_type === "takeaway"
-                  ? `A · ${order.takeaway_name ?? "Cliente"}`
-                  : `T${order.table?.table_number}`}
-              </strong>
-              <span>#{order.order_number}</span>
-              <span>{formatCurrency(order.total)}</span>
-            </button>
+              {activeOrder ? (
+                <button
+                  className="cashier-table-summary"
+                  onClick={() => openPreview(activeOrder, "new_order")}
+                >
+                  <strong>T{table.table_number}</strong>
+                  <span>Attivo · #{activeOrder.order_number}</span>
+                  <span>{formatCurrency(activeOrder.total)}</span>
+                </button>
+              ) : (
+                <div className="cashier-table-summary">
+                  <strong>T{table.table_number}</strong>
+                  <span>{closedOrder ? `Chiuso · #${closedOrder.order_number}` : "Chiuso"}</span>
+                  <span>{closedOrder ? formatCurrency(closedOrder.total) : "—"}</span>
+                </div>
+              )}
+              {closedOrder && !activeOrder && (
+                <button
+                  className="cashier-table-reprint"
+                  disabled={!canWrite || busyJobId !== null}
+                  onClick={() => openReceiptReprintConfirmation(closedOrder)}
+                >
+                  {busyJobId === closedOrder.id ? "Ristampa…" : "Ristampa conto finale"}
+                </button>
+              )}
+            </article>
           ))}
         </CashierColumn>
       </div>
@@ -877,21 +912,24 @@ export function CashierDashboard() {
       )}
 
       {(confirmation?.kind === "retry" ||
-        confirmation?.kind === "reprint") && (
+        confirmation?.kind === "reprint" ||
+        confirmation?.kind === "receipt-reprint") && (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <section className="print-confirmation-modal">
             <p className="eyebrow">Ristampa consapevole</p>
             <h2>
               {confirmation.kind === "retry"
                 ? "Riprova stampa"
-                : "Crea una ristampa"}
+                : confirmation.kind === "receipt-reprint"
+                  ? "Ristampa conto finale"
+                  : "Crea una ristampa"}
             </h2>
             <p className="confirmation-warning">
               La stampa originale potrebbe essere già uscita. Continuando puoi
               produrre un doppione; verrà creato un nuovo tentativo collegato e
               tracciato.
             </p>
-            {confirmation.job && (
+            {"job" in confirmation && confirmation.job && (
               <dl className="print-details">
                 <div>
                   <dt>Job originale</dt>
@@ -1299,6 +1337,16 @@ export function CashierDashboard() {
     });
   }
 
+  function openReceiptReprintConfirmation(order: Order) {
+    setRetryReason("Ristampa conto finale richiesta dalla cassa");
+    setRiskAccepted(false);
+    setConfirmation({
+      kind: "receipt-reprint",
+      order,
+      actionKey: crypto.randomUUID(),
+    });
+  }
+
   function closePrintConfirmation() {
     setConfirmation(null);
     setRiskAccepted(false);
@@ -1341,10 +1389,14 @@ export function CashierDashboard() {
   }
 
   async function confirmRetryOrReprint(
-    target: Extract<PrintConfirmation, { kind: "retry" | "reprint" }>,
+    target: Extract<PrintConfirmation, { kind: "retry" | "reprint" | "receipt-reprint" }>,
   ) {
     if (!riskAccepted || !retryReason.trim()) return;
     closePrintConfirmation();
+    if (target.kind === "receipt-reprint") {
+      await reprintClosedReceipt(target);
+      return;
+    }
     await dispatchPrint(
       target.order,
       "reprint",
@@ -1361,6 +1413,44 @@ export function CashierDashboard() {
             reason: retryReason.trim(),
           },
     );
+  }
+
+  async function reprintClosedReceipt(
+    target: Extract<PrintConfirmation, { kind: "receipt-reprint" }>,
+  ) {
+    if (!canWrite) return;
+    setBusyJobId(target.order.id);
+    try {
+      const response = await fetch("/api/close-table", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "reprint",
+          orderId: target.order.id,
+          actionKey: target.actionKey,
+          reason: retryReason.trim(),
+        }),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        message?: string;
+        reprinted?: boolean;
+      };
+      setMessage(
+        payload.reprinted
+          ? "Conto finale ristampato in una copia."
+          : payload.message ?? payload.error ?? "Ristampa del conto finale non riuscita.",
+      );
+    } catch {
+      markUnreliable();
+      setMessage(
+        "Connessione non affidabile. Non ristampare subito: verifica prima il foglio.",
+      );
+    } finally {
+      setBusyJobId(null);
+      await load();
+      await refreshPrinter();
+    }
   }
 
   async function cancelQueuedPrintJob(job: PrintJob) {
@@ -1478,6 +1568,30 @@ async function loadAllOperationalPrintJobs(
     jobs.push(...page);
     if (page.length < pageSize) return { data: jobs, error: null };
   }
+}
+
+async function loadLatestClosedTableOrders(
+  supabase: ReturnType<typeof createClient>,
+  serviceId: string | null,
+) {
+  if (!serviceId) return { data: [] as Order[], error: null };
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("service_id", serviceId)
+    .eq("order_type", "dine_in")
+    .eq("status", "closed")
+    .order("closed_at", { ascending: false });
+  if (error) return { data: null, error };
+
+  const latestByTable = new Map<string, Order>();
+  for (const order of (data ?? []) as Order[]) {
+    if (order.table_id && !latestByTable.has(order.table_id)) {
+      latestByTable.set(order.table_id, order);
+    }
+  }
+  return { data: [...latestByTable.values()], error: null };
 }
 
 async function loadOrdersByIds(

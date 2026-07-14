@@ -1,5 +1,5 @@
 begin;
-select plan(181);
+select plan(184);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -73,6 +73,12 @@ select has_function(
   'request_receipt_retry',
   array['uuid', 'uuid', 'text'],
   'receipt retries are persisted'
+);
+select has_function(
+  'public',
+  'request_receipt_reprint',
+  array['uuid', 'uuid', 'text'],
+  'closed receipt reprints are persisted'
 );
 select has_function(
   'public',
@@ -1592,6 +1598,26 @@ select is(
   ),
   'closed',
   'manual receipt confirmation really closes the database row'
+);
+select lives_ok(
+  $$
+    select public.request_receipt_reprint(
+      '00000000-0000-4000-9000-000000009922',
+      '00000000-0000-4000-9000-000000009964',
+      'Ristampa conto finale richiesta dal test database'
+    )
+  $$,
+  'a cashier can request a tracked reprint for a closed receipt'
+);
+select is(
+  (
+    select status::text
+    from public.print_jobs
+    where idempotency_key =
+      '00000000-0000-4000-9000-000000009922:receipt:retry:00000000-0000-4000-9000-000000009964'
+  ),
+  'pending',
+  'the closed receipt reprint starts as one pending print job'
 );
 
 rollback to savepoint receipt_state_machine_tests;
