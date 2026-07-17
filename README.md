@@ -11,6 +11,8 @@ Web app mobile-first per menu QR, comande staff, cassa e amministrazione. Next.j
 - `/staff/order/[id]`: comanda asporto con nome cliente e ora di ritiro.
 - `/cassa`: coda realtime, preview ticket 80 mm, stampa browser e chiusura ordine.
 - `/admin`: menu, disponibilità, extra, tavoli e impostazioni del locale.
+- `/admin/statistiche`: dashboard admin con incassi, servizi, prodotti più venduti,
+  costi registrati e margine lordo.
 
 Supabase è l’unica fonte di verità. Il browser non salva menu o comande in `localStorage`.
 
@@ -149,6 +151,8 @@ Il recupero password parte da `/staff/forgot-password` e termina su `/staff/rese
 - RLS: accesso anonimo limitato al menu pubblico; permessi distinti per waiter, cashier e admin.
 - Prezzi e descrizioni vengono copiati nelle righe ordine; le modifiche future al menu non alterano lo storico.
 - Totali, snapshot e audit sono calcolati nel database.
+- I costi prodotto restano in tabelle private e vengono fotografati sulle nuove
+  righe ordine; il margine storico non viene ricalcolato con costi futuri.
 - il passaggio `draft → pending_cashier` (submitted) crea una sola stampa
   `new_order` pending nella stessa transazione;
 - `new_order` e `cancellation` hanno una chiave stabile per l’azione originale;

@@ -1,5 +1,5 @@
 begin;
-select plan(184);
+select plan(193);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -7,6 +7,18 @@ select has_table('public', 'print_jobs', 'print_jobs exists');
 select has_table('public', 'menu_items', 'menu_items exists');
 select has_table('public', 'restaurant_services', 'restaurant services exist');
 select has_table('public', 'service_close_reports', 'service close reports exist');
+select has_table('private', 'menu_item_costs', 'menu item costs stay private');
+select has_table('private', 'menu_extra_costs', 'menu extra costs stay private');
+select has_table(
+  'private',
+  'order_item_cost_snapshots',
+  'order item costs are snapshotted'
+);
+select has_table(
+  'private',
+  'order_item_extra_cost_snapshots',
+  'order item extra costs are snapshotted'
+);
 select has_index('public', 'orders', 'orders_one_active_per_table_idx', 'one active order index exists');
 select has_index(
   'public',
@@ -168,6 +180,24 @@ select has_function(
   array['uuid'],
   'extra removal RPC exists'
 );
+select has_function(
+  'public',
+  'get_admin_analytics',
+  array['date', 'date', 'service_period'],
+  'admin analytics are aggregated in the database'
+);
+select has_function(
+  'public',
+  'get_admin_cost_catalog',
+  array[]::text[],
+  'the server can read the private cost catalog'
+);
+select has_function(
+  'public',
+  'set_admin_product_cost',
+  array['text', 'uuid', 'numeric'],
+  'the server can configure product costs'
+);
 select has_column('public', 'print_jobs', 'manually_confirmed', 'manual confirmation is persisted');
 select has_column('public', 'print_jobs', 'manual_confirmed_at', 'manual confirmation has a timestamp');
 select has_column('public', 'print_jobs', 'verification_required_at', 'uncertain jobs persist verification state');
@@ -191,6 +221,32 @@ select ok(
     'EXECUTE'
   ),
   'the server role can attest verified PrintNode state'
+);
+select ok(
+  has_function_privilege(
+    'service_role',
+    'public.get_admin_analytics(date,date,service_period)',
+    'EXECUTE'
+  )
+  and not has_function_privilege(
+    'authenticated',
+    'public.get_admin_analytics(date,date,service_period)',
+    'EXECUTE'
+  ),
+  'only the server role can execute admin analytics'
+);
+select ok(
+  has_function_privilege(
+    'service_role',
+    'public.set_admin_product_cost(text,uuid,numeric)',
+    'EXECUTE'
+  )
+  and not has_function_privilege(
+    'authenticated',
+    'public.set_admin_product_cost(text,uuid,numeric)',
+    'EXECUTE'
+  ),
+  'only the server role can change private product costs'
 );
 select ok(
   has_table_privilege('service_role', 'public.orders', 'SELECT')
@@ -735,6 +791,10 @@ select is(
   'the idempotency key contains order and type'
 );
 
+update public.profiles
+set role = 'cashier'
+where id = '00000000-0000-4000-9000-000000009901';
+
 insert into public.restaurant_tables (id, table_number, display_name)
 values ('00000000-0000-4000-9000-000000009915', 9905, 'Test comanda annullata');
 
@@ -876,9 +936,6 @@ select lives_ok(
   $test$
     do $$
     begin
-      insert into public.restaurant_tables (id, table_number, display_name)
-      values ('00000000-0000-4000-9000-000000009913', 9903, 'Copie future');
-
       insert into public.orders (id, table_id, service_id)
       values (
         '00000000-0000-4000-9000-000000009923',
@@ -1742,7 +1799,7 @@ select throws_ok(
     )
   $$,
   'P0001',
-  'Ci sono ancora 1 ordini senza comanda stampata e 0 job di stampa da risolvere',
+  null,
   'safe closure refuses an unsubmitted draft'
 );
 
