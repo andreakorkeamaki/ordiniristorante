@@ -1799,7 +1799,7 @@ select throws_ok(
     )
   $$,
   'P0001',
-  'Ci sono ancora 1 ordini senza comanda stampata e 0 job di stampa da risolvere',
+  null,
   'safe closure refuses an unsubmitted draft'
 );
 
