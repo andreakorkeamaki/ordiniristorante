@@ -791,6 +791,10 @@ select is(
   'the idempotency key contains order and type'
 );
 
+update public.profiles
+set role = 'cashier'
+where id = '00000000-0000-4000-9000-000000009901';
+
 insert into public.restaurant_tables (id, table_number, display_name)
 values ('00000000-0000-4000-9000-000000009915', 9905, 'Test comanda annullata');
 
