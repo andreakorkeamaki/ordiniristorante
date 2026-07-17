@@ -13,6 +13,7 @@ const links: Record<AppRole, { href: string; label: string }[]> = {
     { href: "/staff/tables", label: "Tavoli" },
     { href: "/asporti", label: "Asporti" },
     { href: "/cassa", label: "Cassa" },
+    { href: "/admin/statistiche", label: "Statistiche" },
     { href: "/admin", label: "Admin" },
   ],
 };
