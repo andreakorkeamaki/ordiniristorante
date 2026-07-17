@@ -936,9 +936,6 @@ select lives_ok(
   $test$
     do $$
     begin
-      insert into public.restaurant_tables (id, table_number, display_name)
-      values ('00000000-0000-4000-9000-000000009913', 9903, 'Copie future');
-
       insert into public.orders (id, table_id, service_id)
       values (
         '00000000-0000-4000-9000-000000009923',
