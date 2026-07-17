@@ -1,4 +1,4 @@
-import type { ServicePeriod } from "@/types/domain";
+import type { OrderType, ServicePeriod } from "@/types/domain";
 
 export type AnalyticsPeriod = ServicePeriod | null;
 
@@ -6,6 +6,7 @@ export interface AnalyticsRange {
   from: string;
   to: string;
   period: AnalyticsPeriod;
+  orderType: OrderType | null;
 }
 
 export interface AnalyticsMetrics {
@@ -76,10 +77,11 @@ export interface CostCatalog {
 }
 
 const PERIODS = new Set<ServicePeriod>(["pranzo", "cena", "recupero"]);
+const ORDER_TYPES = new Set<OrderType>(["dine_in", "takeaway"]);
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function resolveAnalyticsRange(
-  params: { from?: string; to?: string; period?: string },
+  params: { from?: string; to?: string; period?: string; order_type?: string },
   today = businessDateToday(),
 ): AnalyticsRange {
   const defaultFrom = shiftIsoDate(today, -29);
@@ -91,6 +93,9 @@ export function resolveAnalyticsRange(
     to: from <= to ? to : today,
     period: PERIODS.has(params.period as ServicePeriod)
       ? (params.period as ServicePeriod)
+      : null,
+    orderType: ORDER_TYPES.has(params.order_type as OrderType)
+      ? (params.order_type as OrderType)
       : null,
   };
 }

@@ -211,7 +211,7 @@ export function TakeawayDashboard() {
             ? isPreviousService(service)
               ? "Chiudi il servizio precedente prima di creare nuovi asporti."
               : "Puoi creare e modificare le comande da asporto."
-            : "Inizia pranzo o cena dalla Cassa prima di creare un asporto."}
+            : "Inizia il servizio dalla Cassa prima di creare un asporto."}
         </span>
       </section>
 

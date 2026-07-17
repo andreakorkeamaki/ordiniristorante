@@ -1,5 +1,10 @@
 begin;
 
+-- The period remains part of the shared data model. This restaurant starts
+-- with lunch hidden and can enable it later from Admin > Impostazioni.
+alter table public.restaurant_settings
+  add column lunch_service_enabled boolean not null default false;
+
 -- Costs are deliberately kept outside the exposed public schema. The public
 -- menu is readable by anonymous users, while costs and margins are admin-only.
 create table private.menu_item_costs (
@@ -219,7 +224,8 @@ $$;
 create or replace function public.get_admin_analytics(
   p_from date,
   p_to date,
-  p_period public.service_period default null
+  p_period public.service_period default null,
+  p_order_type public.order_type default null
 )
 returns jsonb
 language sql
@@ -237,6 +243,7 @@ as $$
     select orders.*
     from public.orders as orders
     join filtered_services as service on service.id = orders.service_id
+    where p_order_type is null or orders.order_type = p_order_type
   ),
   closed_orders as (
     select * from range_orders where status = 'closed'
@@ -520,14 +527,24 @@ revoke all on function public.set_admin_product_cost(text, uuid, numeric)
   from public, anon, authenticated;
 revoke all on function public.get_admin_cost_catalog()
   from public, anon, authenticated;
-revoke all on function public.get_admin_analytics(date, date, public.service_period)
+revoke all on function public.get_admin_analytics(
+  date,
+  date,
+  public.service_period,
+  public.order_type
+)
   from public, anon, authenticated;
 
 grant execute on function public.set_admin_product_cost(text, uuid, numeric)
   to service_role;
 grant execute on function public.get_admin_cost_catalog()
   to service_role;
-grant execute on function public.get_admin_analytics(date, date, public.service_period)
+grant execute on function public.get_admin_analytics(
+  date,
+  date,
+  public.service_period,
+  public.order_type
+)
   to service_role;
 
 commit;

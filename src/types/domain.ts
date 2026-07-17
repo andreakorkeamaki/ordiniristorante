@@ -30,6 +30,7 @@ export interface RestaurantSettings {
   id: string;
   restaurant_name: string;
   cover_charge: number;
+  lunch_service_enabled: boolean;
   dine_in_print_copies: number;
   takeaway_print_copies: number;
   order_ticket_print_mode: OrderTicketPrintMode;

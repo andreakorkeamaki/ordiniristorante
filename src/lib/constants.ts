@@ -2,6 +2,7 @@ export const DEFAULT_SETTINGS = {
   id: "00000000-0000-0000-0000-000000000001",
   restaurant_name: "La Sagretta",
   cover_charge: 1.9,
+  lunch_service_enabled: false,
   dine_in_print_copies: 3,
   takeaway_print_copies: 3,
   order_ticket_print_mode: "department_split",

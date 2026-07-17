@@ -190,7 +190,7 @@ export function StaffTables({ profile }: { profile: Profile }) {
             ? isPreviousService(service)
               ? "La cassa deve chiudere questo servizio precedente."
               : "Puoi aprire e modificare le comande."
-            : "La cassa deve iniziare pranzo o cena prima di aprire i tavoli."}
+            : "La cassa deve iniziare il servizio prima di aprire i tavoli."}
         </span>
       </section>
 
