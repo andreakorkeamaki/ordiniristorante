@@ -1,5 +1,5 @@
 begin;
-select plan(198);
+select plan(202);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -209,6 +209,12 @@ select hasnt_function(
 );
 select has_function(
   'public',
+  'get_admin_waiter_analytics',
+  array['date', 'date', 'service_period', 'order_type'],
+  'waiter analytics are aggregated in the database'
+);
+select has_function(
+  'public',
   'get_admin_cost_catalog',
   array[]::text[],
   'the server can read the private cost catalog'
@@ -259,6 +265,19 @@ select ok(
 select ok(
   has_function_privilege(
     'service_role',
+    'public.get_admin_waiter_analytics(date,date,service_period,order_type)',
+    'EXECUTE'
+  )
+  and not has_function_privilege(
+    'authenticated',
+    'public.get_admin_waiter_analytics(date,date,service_period,order_type)',
+    'EXECUTE'
+  ),
+  'only the server role can execute waiter analytics'
+);
+select ok(
+  has_function_privilege(
+    'service_role',
     'public.set_admin_product_cost(text,uuid,numeric)',
     'EXECUTE'
   )
@@ -272,6 +291,7 @@ select ok(
 select ok(
   has_table_privilege('service_role', 'public.orders', 'SELECT')
   and has_table_privilege('service_role', 'public.restaurant_services', 'SELECT')
+  and has_table_privilege('service_role', 'public.profiles', 'SELECT')
   and has_table_privilege('service_role', 'public.print_jobs', 'SELECT')
   and has_table_privilege('service_role', 'public.print_jobs', 'UPDATE'),
   'the server role can claim and verify print jobs'
@@ -1921,6 +1941,67 @@ select is(
   ),
   'analytics can isolate takeaway orders'
 );
+
+update public.profiles
+set role = 'waiter'
+where id = '00000000-0000-4000-9000-000000009901';
+
+select is(
+  (
+    select (entry ->> 'order_count')::integer
+    from jsonb_array_elements(
+      public.get_admin_waiter_analytics(
+        (select business_date from public.restaurant_services order by opened_at limit 1),
+        (select business_date from public.restaurant_services order by opened_at limit 1),
+        null,
+        null
+      )
+    ) as entry
+    where entry ->> 'id' = '00000000-0000-4000-9000-000000009901'
+  ),
+  (
+    select count(*)::integer
+    from public.orders as orders
+    join public.restaurant_services as service on service.id = orders.service_id
+    where orders.status = 'closed'
+      and orders.created_by = '00000000-0000-4000-9000-000000009901'
+      and service.business_date = (
+        select business_date from public.restaurant_services order by opened_at limit 1
+      )
+  ),
+  'waiter analytics count each closed order for its creator'
+);
+select is(
+  (
+    select (entry ->> 'order_count')::integer
+    from jsonb_array_elements(
+      public.get_admin_waiter_analytics(
+        (select business_date from public.restaurant_services order by opened_at limit 1),
+        (select business_date from public.restaurant_services order by opened_at limit 1),
+        null,
+        'takeaway'
+      )
+    ) as entry
+    where entry ->> 'id' = '00000000-0000-4000-9000-000000009901'
+  ),
+  (
+    select count(*)::integer
+    from public.orders as orders
+    join public.restaurant_services as service on service.id = orders.service_id
+    where orders.status = 'closed'
+      and orders.order_type = 'takeaway'
+      and orders.created_by = '00000000-0000-4000-9000-000000009901'
+      and service.business_date = (
+        select business_date from public.restaurant_services order by opened_at limit 1
+      )
+  ),
+  'waiter analytics respect the order channel filter'
+);
+
+update public.profiles
+set role = 'cashier'
+where id = '00000000-0000-4000-9000-000000009901';
+
 select is(
   (
     select count(*)::integer

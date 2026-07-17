@@ -3787,8 +3787,13 @@ button.cashier-table-summary {
   background: var(--red);
 }
 
+.analytics-waiters-panel,
 .analytics-services-panel {
   margin-top: 1rem;
+}
+
+.analytics-waiter-table {
+  min-width: 48rem;
 }
 
 .analytics-table-wrap {

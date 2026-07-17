@@ -54,16 +54,32 @@ describe("admin analytics", () => {
   });
 
   it("normalizza numeri Postgres e lascia nullo il margine incompleto", () => {
-    const result = normalizeAdminAnalytics({
-      metrics: {
-        revenue: "120.50",
-        order_count: 4,
-        cost_coverage: 75,
-        gross_profit: null,
+    const result = normalizeAdminAnalytics(
+      {
+        metrics: {
+          revenue: "120.50",
+          order_count: 4,
+          cost_coverage: 75,
+          gross_profit: null,
+        },
+        top_pizzas: [{ name: "Margherita", quantity: "6", revenue: "45" }],
+        services: [],
       },
-      top_pizzas: [{ name: "Margherita", quantity: "6", revenue: "45" }],
-      services: [],
-    });
+      [
+        {
+          id: "waiter-1",
+          full_name: "Anna",
+          active: true,
+          order_count: "4",
+          cancelled_count: "1",
+          dine_in_order_count: "3",
+          takeaway_order_count: "1",
+          cover_count: "9",
+          revenue: "120.50",
+          average_order: "30.125",
+        },
+      ],
+    );
 
     expect(result.metrics.revenue).toBe(120.5);
     expect(result.metrics.gross_profit).toBeNull();
@@ -71,6 +87,18 @@ describe("admin analytics", () => {
       name: "Margherita",
       quantity: 6,
       revenue: 45,
+    });
+    expect(result.waiters[0]).toEqual({
+      id: "waiter-1",
+      full_name: "Anna",
+      active: true,
+      order_count: 4,
+      cancelled_count: 1,
+      dine_in_order_count: 3,
+      takeaway_order_count: 1,
+      cover_count: 9,
+      revenue: 120.5,
+      average_order: 30.125,
     });
   });
 

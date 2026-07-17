@@ -54,11 +54,25 @@ export interface AnalyticsServiceEntry {
   duration_minutes: number;
 }
 
+export interface AnalyticsWaiterEntry {
+  id: string;
+  full_name: string;
+  active: boolean;
+  order_count: number;
+  cancelled_count: number;
+  dine_in_order_count: number;
+  takeaway_order_count: number;
+  cover_count: number;
+  revenue: number;
+  average_order: number;
+}
+
 export interface AdminAnalytics {
   metrics: AnalyticsMetrics;
   daily: AnalyticsDailyEntry[];
   top_pizzas: AnalyticsProductEntry[];
   top_products: AnalyticsProductEntry[];
+  waiters: AnalyticsWaiterEntry[];
   services: AnalyticsServiceEntry[];
 }
 
@@ -117,7 +131,10 @@ export function shiftIsoDate(value: string, days: number) {
   return date.toISOString().slice(0, 10);
 }
 
-export function normalizeAdminAnalytics(value: unknown): AdminAnalytics {
+export function normalizeAdminAnalytics(
+  value: unknown,
+  waiterValue?: unknown,
+): AdminAnalytics {
   const root = asRecord(value);
   const metrics = asRecord(root.metrics);
 
@@ -146,6 +163,7 @@ export function normalizeAdminAnalytics(value: unknown): AdminAnalytics {
     }),
     top_pizzas: normalizeProducts(root.top_pizzas),
     top_products: normalizeProducts(root.top_products),
+    waiters: normalizeWaiters(waiterValue ?? root.waiters),
     services: arrayValue(root.services).map((entry) => {
       const row = asRecord(entry);
       const period = stringValue(row.period);
@@ -170,6 +188,24 @@ export function normalizeAdminAnalytics(value: unknown): AdminAnalytics {
       };
     }),
   };
+}
+
+function normalizeWaiters(value: unknown): AnalyticsWaiterEntry[] {
+  return arrayValue(value).map((entry) => {
+    const row = asRecord(entry);
+    return {
+      id: stringValue(row.id),
+      full_name: stringValue(row.full_name) || "Cameriere",
+      active: row.active === true,
+      order_count: numberValue(row.order_count),
+      cancelled_count: numberValue(row.cancelled_count),
+      dine_in_order_count: numberValue(row.dine_in_order_count),
+      takeaway_order_count: numberValue(row.takeaway_order_count),
+      cover_count: numberValue(row.cover_count),
+      revenue: numberValue(row.revenue),
+      average_order: numberValue(row.average_order),
+    };
+  });
 }
 
 export function normalizeCostCatalog(value: unknown): CostCatalog {

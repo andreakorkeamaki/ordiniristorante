@@ -13,19 +13,27 @@ export async function loadAdminAnalytics(
   range: AnalyticsRange,
 ): Promise<{ data: AdminAnalytics | null; error: string | null }> {
   try {
-    const { data, error } = await createAdminClient().rpc("get_admin_analytics", {
+    const admin = createAdminClient();
+    const parameters = {
       p_from: range.from,
       p_to: range.to,
       p_order_type: range.orderType,
       p_period: range.period,
-    });
-    if (error) {
+    };
+    const [analyticsResult, waiterResult] = await Promise.all([
+      admin.rpc("get_admin_analytics", parameters),
+      admin.rpc("get_admin_waiter_analytics", parameters),
+    ]);
+    if (analyticsResult.error || waiterResult.error) {
       return {
         data: null,
         error: "Statistiche non disponibili. Verifica configurazione e migration.",
       };
     }
-    return { data: normalizeAdminAnalytics(data), error: null };
+    return {
+      data: normalizeAdminAnalytics(analyticsResult.data, waiterResult.data),
+      error: null,
+    };
   } catch {
     return {
       data: null,

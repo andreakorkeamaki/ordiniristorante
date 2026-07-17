@@ -8,6 +8,7 @@ import {
   type AnalyticsProductEntry,
   type AnalyticsRange,
   type AnalyticsServiceEntry,
+  type AnalyticsWaiterEntry,
 } from "@/lib/admin-analytics";
 import { formatCurrency } from "@/lib/format";
 import type { ServicePeriod } from "@/types/domain";
@@ -195,6 +196,21 @@ function AnalyticsContent({ analytics }: { analytics: AdminAnalytics }) {
         </article>
       </section>
 
+      <section className="analytics-panel analytics-waiters-panel">
+        <div className="analytics-panel-heading">
+          <div>
+            <p className="eyebrow">Squadra</p>
+            <h2>Ordini per cameriere</h2>
+          </div>
+          <span>
+            {analytics.waiters.length === 1
+              ? "1 cameriere"
+              : `${analytics.waiters.length} camerieri`}
+          </span>
+        </div>
+        <WaiterStats entries={analytics.waiters} />
+      </section>
+
       <section className="analytics-panel analytics-services-panel">
         <div className="analytics-panel-heading">
           <div>
@@ -225,6 +241,60 @@ function AnalyticsContent({ analytics }: { analytics: AdminAnalytics }) {
         </div>
       </section>
     </>
+  );
+}
+
+function WaiterStats({ entries }: { entries: AnalyticsWaiterEntry[] }) {
+  if (!entries.length) {
+    return (
+      <p className="analytics-empty-copy">
+        Nessun cameriere disponibile nel periodo.
+      </p>
+    );
+  }
+
+  return (
+    <div className="analytics-table-wrap">
+      <table className="analytics-table analytics-waiter-table">
+        <thead>
+          <tr>
+            <th>Cameriere</th>
+            <th>Ordini</th>
+            <th>Canali</th>
+            <th>Coperti</th>
+            <th>Media ordine</th>
+            <th>Incasso</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map((entry) => (
+            <tr key={entry.id}>
+              <td>
+                <strong>{entry.full_name}</strong>
+                {!entry.active && <small>Profilo non attivo</small>}
+              </td>
+              <td>
+                <strong>{entry.order_count}</strong>
+                <small>
+                  {entry.cancelled_count
+                    ? `${entry.cancelled_count} annullati`
+                    : "Nessun annullato"}
+                </small>
+              </td>
+              <td>
+                {entry.dine_in_order_count} sala
+                <small>{entry.takeaway_order_count} asporto</small>
+              </td>
+              <td>{entry.cover_count}</td>
+              <td>{formatCurrency(entry.average_order)}</td>
+              <td>
+                <strong>{formatCurrency(entry.revenue)}</strong>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
