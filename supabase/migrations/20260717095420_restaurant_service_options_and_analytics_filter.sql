@@ -1,225 +1,23 @@
 begin;
 
--- Costs are deliberately kept outside the exposed public schema. The public
--- menu is readable by anonymous users, while costs and margins are admin-only.
-create table private.menu_item_costs (
-  menu_item_id uuid primary key
-    references public.menu_items(id) on delete cascade,
-  unit_cost numeric(10, 2) not null
-    check (unit_cost >= 0 and unit_cost < 1000000),
-  updated_at timestamptz not null default now()
+-- Keep the shared lunch period in the data model while hiding it for this
+-- restaurant until an administrator explicitly enables it.
+alter table public.restaurant_settings
+  add column lunch_service_enabled boolean not null default false;
+
+-- Supabase/PostgREST does not support overloaded RPCs reliably. Replace the
+-- already-deployed three-argument function with the filtered four-argument one.
+drop function public.get_admin_analytics(
+  date,
+  date,
+  public.service_period
 );
-
-create table private.menu_extra_costs (
-  menu_extra_id uuid primary key
-    references public.menu_extras(id) on delete cascade,
-  unit_cost numeric(10, 2) not null
-    check (unit_cost >= 0 and unit_cost < 1000000),
-  updated_at timestamptz not null default now()
-);
-
--- A sale keeps the cost that was configured when the item was added. Historic
--- rows are intentionally not backfilled with today's cost.
-create table private.order_item_cost_snapshots (
-  order_item_id uuid primary key
-    references public.order_items(id) on delete cascade,
-  unit_cost numeric(10, 2)
-    check (unit_cost is null or (unit_cost >= 0 and unit_cost < 1000000)),
-  captured_at timestamptz not null default now()
-);
-
-create table private.order_item_extra_cost_snapshots (
-  order_item_extra_id uuid primary key
-    references public.order_item_extras(id) on delete cascade,
-  unit_cost numeric(10, 2)
-    check (unit_cost is null or (unit_cost >= 0 and unit_cost < 1000000)),
-  captured_at timestamptz not null default now()
-);
-
-revoke all on table private.menu_item_costs from public, anon, authenticated;
-revoke all on table private.menu_extra_costs from public, anon, authenticated;
-revoke all on table private.order_item_cost_snapshots from public, anon, authenticated;
-revoke all on table private.order_item_extra_cost_snapshots from public, anon, authenticated;
-
-grant usage on schema private to service_role;
-grant select on table public.menu_categories to service_role;
-grant select on table public.menu_items to service_role;
-grant select on table public.menu_extras to service_role;
-grant select on table public.restaurant_services to service_role;
-grant select on table public.orders to service_role;
-grant select on table public.order_items to service_role;
-grant select on table public.order_item_extras to service_role;
-grant select, insert, update, delete on table private.menu_item_costs to service_role;
-grant select, insert, update, delete on table private.menu_extra_costs to service_role;
-grant select on table private.order_item_cost_snapshots to service_role;
-grant select on table private.order_item_extra_cost_snapshots to service_role;
-
-create or replace function private.capture_order_item_cost()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  insert into private.order_item_cost_snapshots (order_item_id, unit_cost)
-  values (
-    new.id,
-    (
-      select configured.unit_cost
-      from private.menu_item_costs as configured
-      where configured.menu_item_id = new.menu_item_id
-    )
-  )
-  on conflict (order_item_id) do nothing;
-  return new;
-end;
-$$;
-
-create trigger order_items_capture_cost
-after insert on public.order_items
-for each row execute function private.capture_order_item_cost();
-
-create or replace function private.capture_order_item_extra_cost()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  insert into private.order_item_extra_cost_snapshots (
-    order_item_extra_id,
-    unit_cost
-  )
-  values (
-    new.id,
-    (
-      select configured.unit_cost
-      from private.menu_extra_costs as configured
-      where configured.menu_extra_id = new.menu_extra_id
-    )
-  )
-  on conflict (order_item_extra_id) do nothing;
-  return new;
-end;
-$$;
-
-create trigger order_item_extras_capture_cost
-after insert on public.order_item_extras
-for each row execute function private.capture_order_item_extra_cost();
-
-revoke all on function private.capture_order_item_cost() from public, anon, authenticated;
-revoke all on function private.capture_order_item_extra_cost() from public, anon, authenticated;
-
-create or replace function public.set_admin_product_cost(
-  p_kind text,
-  p_product_id uuid,
-  p_unit_cost numeric
-)
-returns void
-language plpgsql
-security invoker
-set search_path = ''
-as $$
-begin
-  if p_kind not in ('item', 'extra') then
-    raise exception 'Tipo prodotto non valido';
-  end if;
-
-  if p_unit_cost is not null and (p_unit_cost < 0 or p_unit_cost >= 1000000) then
-    raise exception 'Costo prodotto non valido';
-  end if;
-
-  if p_kind = 'item' then
-    if not exists (
-      select 1 from public.menu_items where id = p_product_id
-    ) then
-      raise exception 'Prodotto non disponibile';
-    end if;
-
-    if p_unit_cost is null then
-      delete from private.menu_item_costs where menu_item_id = p_product_id;
-    else
-      insert into private.menu_item_costs (menu_item_id, unit_cost)
-      values (p_product_id, round(p_unit_cost, 2))
-      on conflict (menu_item_id) do update
-      set unit_cost = excluded.unit_cost,
-          updated_at = now();
-    end if;
-    return;
-  end if;
-
-  if not exists (
-    select 1 from public.menu_extras where id = p_product_id
-  ) then
-    raise exception 'Extra non disponibile';
-  end if;
-
-  if p_unit_cost is null then
-    delete from private.menu_extra_costs where menu_extra_id = p_product_id;
-  else
-    insert into private.menu_extra_costs (menu_extra_id, unit_cost)
-    values (p_product_id, round(p_unit_cost, 2))
-    on conflict (menu_extra_id) do update
-    set unit_cost = excluded.unit_cost,
-        updated_at = now();
-  end if;
-end;
-$$;
-
-create or replace function public.get_admin_cost_catalog()
-returns jsonb
-language sql
-stable
-security invoker
-set search_path = ''
-as $$
-  select jsonb_build_object(
-    'items', coalesce(
-      (
-        select jsonb_agg(
-          jsonb_build_object(
-            'id', item.id,
-            'name', item.name,
-            'category', category.name,
-            'price', item.price,
-            'unit_cost', configured.unit_cost,
-            'active', item.active
-          )
-          order by category.sort_order, category.name, item.sort_order, item.name
-        )
-        from public.menu_items as item
-        join public.menu_categories as category on category.id = item.category_id
-        left join private.menu_item_costs as configured
-          on configured.menu_item_id = item.id
-      ),
-      '[]'::jsonb
-    ),
-    'extras', coalesce(
-      (
-        select jsonb_agg(
-          jsonb_build_object(
-            'id', extra.id,
-            'name', extra.name,
-            'category', 'Extra',
-            'price', extra.price,
-            'unit_cost', configured.unit_cost,
-            'active', extra.active
-          )
-          order by extra.sort_order, extra.name
-        )
-        from public.menu_extras as extra
-        left join private.menu_extra_costs as configured
-          on configured.menu_extra_id = extra.id
-      ),
-      '[]'::jsonb
-    )
-  );
-$$;
 
 create or replace function public.get_admin_analytics(
   p_from date,
   p_to date,
-  p_period public.service_period default null
+  p_period public.service_period default null,
+  p_order_type public.order_type default null
 )
 returns jsonb
 language sql
@@ -237,6 +35,7 @@ as $$
     select orders.*
     from public.orders as orders
     join filtered_services as service on service.id = orders.service_id
+    where p_order_type is null or orders.order_type = p_order_type
   ),
   closed_orders as (
     select * from range_orders where status = 'closed'
@@ -516,18 +315,20 @@ as $$
   from totals;
 $$;
 
-revoke all on function public.set_admin_product_cost(text, uuid, numeric)
-  from public, anon, authenticated;
-revoke all on function public.get_admin_cost_catalog()
-  from public, anon, authenticated;
-revoke all on function public.get_admin_analytics(date, date, public.service_period)
+revoke all on function public.get_admin_analytics(
+  date,
+  date,
+  public.service_period,
+  public.order_type
+)
   from public, anon, authenticated;
 
-grant execute on function public.set_admin_product_cost(text, uuid, numeric)
-  to service_role;
-grant execute on function public.get_admin_cost_catalog()
-  to service_role;
-grant execute on function public.get_admin_analytics(date, date, public.service_period)
+grant execute on function public.get_admin_analytics(
+  date,
+  date,
+  public.service_period,
+  public.order_type
+)
   to service_role;
 
 commit;

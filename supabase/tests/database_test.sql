@@ -1,5 +1,5 @@
 begin;
-select plan(197);
+select plan(198);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -200,6 +200,12 @@ select has_function(
   'get_admin_analytics',
   array['date', 'date', 'service_period', 'order_type'],
   'admin analytics are aggregated in the database'
+);
+select hasnt_function(
+  'public',
+  'get_admin_analytics',
+  array['date', 'date', 'service_period'],
+  'the obsolete analytics RPC signature is removed'
 );
 select has_function(
   'public',
