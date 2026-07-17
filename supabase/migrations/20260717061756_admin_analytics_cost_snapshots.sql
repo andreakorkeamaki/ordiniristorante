@@ -377,7 +377,16 @@ as $$
     from filtered_services as service
     left join range_orders as orders on orders.service_id = service.id
     left join service_costs as costs on costs.service_id = service.id
-    group by service.id, costs.units, costs.costed_units, costs.known_cost
+    group by
+      service.id,
+      service.business_date,
+      service.period,
+      service.opened_at,
+      service.closed_at,
+      service.forced_close,
+      costs.units,
+      costs.costed_units,
+      costs.known_cost
   ),
   totals as (
     select
