@@ -1,5 +1,5 @@
 begin;
-select plan(193);
+select plan(197);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -142,6 +142,21 @@ select has_column(
   'service close reports persist print recovery state'
 );
 select has_column('public', 'orders', 'order_type', 'orders distinguish tables and takeaways');
+select has_column(
+  'public',
+  'restaurant_settings',
+  'lunch_service_enabled',
+  'lunch availability is configurable without changing service periods'
+);
+select is(
+  (
+    select lunch_service_enabled
+    from public.restaurant_settings
+    limit 1
+  ),
+  false,
+  'lunch starts hidden for this restaurant'
+);
 select has_column('public', 'orders', 'takeaway_name', 'takeaways store the customer name');
 select has_column('public', 'orders', 'takeaway_pickup_at', 'takeaways store the pickup time');
 select has_column(
@@ -183,7 +198,7 @@ select has_function(
 select has_function(
   'public',
   'get_admin_analytics',
-  array['date', 'date', 'service_period'],
+  array['date', 'date', 'service_period', 'order_type'],
   'admin analytics are aggregated in the database'
 );
 select has_function(
@@ -225,12 +240,12 @@ select ok(
 select ok(
   has_function_privilege(
     'service_role',
-    'public.get_admin_analytics(date,date,service_period)',
+    'public.get_admin_analytics(date,date,service_period,order_type)',
     'EXECUTE'
   )
   and not has_function_privilege(
     'authenticated',
-    'public.get_admin_analytics(date,date,service_period)',
+    'public.get_admin_analytics(date,date,service_period,order_type)',
     'EXECUTE'
   ),
   'only the server role can execute admin analytics'
@@ -1867,6 +1882,38 @@ select is(
   ),
   'closed',
   'submitted orders are closed when the service closes'
+);
+select is(
+  (
+    public.get_admin_analytics(
+      (select business_date from public.restaurant_services order by opened_at limit 1),
+      (select business_date from public.restaurant_services order by opened_at limit 1),
+      null,
+      'dine_in'
+    ) -> 'metrics' ->> 'order_count'
+  )::integer,
+  (
+    select count(*)::integer
+    from public.orders
+    where status = 'closed' and order_type = 'dine_in'
+  ),
+  'analytics can isolate dining-room orders'
+);
+select is(
+  (
+    public.get_admin_analytics(
+      (select business_date from public.restaurant_services order by opened_at limit 1),
+      (select business_date from public.restaurant_services order by opened_at limit 1),
+      null,
+      'takeaway'
+    ) -> 'metrics' ->> 'order_count'
+  )::integer,
+  (
+    select count(*)::integer
+    from public.orders
+    where status = 'closed' and order_type = 'takeaway'
+  ),
+  'analytics can isolate takeaway orders'
 );
 select is(
   (

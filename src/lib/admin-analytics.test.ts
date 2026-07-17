@@ -14,22 +14,43 @@ describe("admin analytics", () => {
       from: "2026-06-19",
       to: "2026-07-18",
       period: null,
+      orderType: null,
     });
   });
 
   it("accetta date e turno validi e scarta filtri incoerenti", () => {
     expect(
       resolveAnalyticsRange(
-        { from: "2026-07-01", to: "2026-07-17", period: "cena" },
+        {
+          from: "2026-07-01",
+          to: "2026-07-17",
+          period: "cena",
+          order_type: "takeaway",
+        },
         "2026-07-17",
       ),
-    ).toEqual({ from: "2026-07-01", to: "2026-07-17", period: "cena" });
+    ).toEqual({
+      from: "2026-07-01",
+      to: "2026-07-17",
+      period: "cena",
+      orderType: "takeaway",
+    });
     expect(
       resolveAnalyticsRange(
-        { from: "2026-07-20", to: "2026-07-01", period: "altro" },
+        {
+          from: "2026-07-20",
+          to: "2026-07-01",
+          period: "altro",
+          order_type: "altro",
+        },
         "2026-07-17",
       ),
-    ).toEqual({ from: "2026-06-18", to: "2026-07-17", period: null });
+    ).toEqual({
+      from: "2026-06-18",
+      to: "2026-07-17",
+      period: null,
+      orderType: null,
+    });
   });
 
   it("normalizza numeri Postgres e lascia nullo il margine incompleto", () => {

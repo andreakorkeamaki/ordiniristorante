@@ -2,7 +2,10 @@ import type { Metadata } from "next";
 import { AppHeader } from "@/components/app-header";
 import { AdminAnalyticsDashboard } from "@/components/admin-analytics-dashboard";
 import { resolveAnalyticsRange } from "@/lib/admin-analytics";
-import { loadAdminAnalytics } from "@/lib/admin-analytics-server";
+import {
+  loadAdminAnalytics,
+  loadLunchServiceEnabled,
+} from "@/lib/admin-analytics-server";
 import { requireProfile } from "@/lib/auth";
 
 export const metadata: Metadata = { title: "Statistiche" };
@@ -11,10 +14,20 @@ export const dynamic = "force-dynamic";
 export default async function AdminAnalyticsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string; period?: string }>;
+  searchParams: Promise<{
+    from?: string;
+    to?: string;
+    period?: string;
+    order_type?: string;
+  }>;
 }) {
   const profile = await requireProfile(["admin"]);
-  const range = resolveAnalyticsRange(await searchParams);
+  const requestedRange = resolveAnalyticsRange(await searchParams);
+  const lunchEnabled = await loadLunchServiceEnabled();
+  const range =
+    !lunchEnabled && requestedRange.period === "pranzo"
+      ? { ...requestedRange, period: null }
+      : requestedRange;
   const result = await loadAdminAnalytics(range);
 
   return (
@@ -24,6 +37,7 @@ export default async function AdminAnalyticsPage({
         <AdminAnalyticsDashboard
           analytics={result.data}
           error={result.error}
+          lunchEnabled={lunchEnabled}
           range={range}
         />
       </main>
