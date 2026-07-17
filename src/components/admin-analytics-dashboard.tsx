@@ -15,10 +15,12 @@ import type { ServicePeriod } from "@/types/domain";
 export function AdminAnalyticsDashboard({
   analytics,
   error,
+  lunchEnabled,
   range,
 }: {
   analytics: AdminAnalytics | null;
   error: string | null;
+  lunchEnabled: boolean;
   range: AnalyticsRange;
 }) {
   const today = businessDateToday();
@@ -41,12 +43,12 @@ export function AdminAnalyticsDashboard({
 
       <section className="analytics-filter-panel" aria-label="Filtri statistiche">
         <div className="analytics-presets" aria-label="Intervalli rapidi">
-          <PresetLink days={7} label="7 giorni" period={range.period} today={today} />
-          <PresetLink days={30} label="30 giorni" period={range.period} today={today} />
-          <PresetLink days={90} label="90 giorni" period={range.period} today={today} />
+          <PresetLink days={7} label="7 giorni" range={range} today={today} />
+          <PresetLink days={30} label="30 giorni" range={range} today={today} />
+          <PresetLink days={90} label="90 giorni" range={range} today={today} />
           <Link
             className="analytics-preset"
-            href={analyticsHref("2000-01-01", today, range.period)}
+            href={analyticsHref("2000-01-01", today, range)}
           >
             Tutto
           </Link>
@@ -64,9 +66,17 @@ export function AdminAnalyticsDashboard({
             <span>Turno</span>
             <select name="period" defaultValue={range.period ?? "all"}>
               <option value="all">Tutti</option>
-              <option value="pranzo">Pranzo</option>
+              {lunchEnabled && <option value="pranzo">Pranzo</option>}
               <option value="cena">Cena</option>
               <option value="recupero">Recupero</option>
+            </select>
+          </label>
+          <label>
+            <span>Canale</span>
+            <select name="order_type" defaultValue={range.orderType ?? "all"}>
+              <option value="all">Tutti</option>
+              <option value="dine_in">Sala</option>
+              <option value="takeaway">Asporto</option>
             </select>
           </label>
           <button className="button button-primary" type="submit">
@@ -241,18 +251,18 @@ function MetricCard({
 function PresetLink({
   days,
   label,
-  period,
+  range,
   today,
 }: {
   days: number;
   label: string;
-  period: AnalyticsRange["period"];
+  range: AnalyticsRange;
   today: string;
 }) {
   return (
     <Link
       className="analytics-preset"
-      href={analyticsHref(shiftIsoDate(today, -(days - 1)), today, period)}
+      href={analyticsHref(shiftIsoDate(today, -(days - 1)), today, range)}
     >
       {label}
     </Link>
@@ -387,9 +397,10 @@ function ServiceRow({ service }: { service: AnalyticsServiceEntry }) {
   );
 }
 
-function analyticsHref(from: string, to: string, period: AnalyticsRange["period"]) {
+function analyticsHref(from: string, to: string, range: AnalyticsRange) {
   const query = new URLSearchParams({ from, to });
-  if (period) query.set("period", period);
+  if (range.period) query.set("period", range.period);
+  if (range.orderType) query.set("order_type", range.orderType);
   return `/admin/statistiche?${query.toString()}`;
 }
 

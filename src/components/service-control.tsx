@@ -48,6 +48,32 @@ export function ServiceControl({
   const [forceReason, setForceReason] = useState("");
   const [forceAccepted, setForceAccepted] = useState(false);
   const [closeReport, setCloseReport] = useState<CloseReportNotice | null>(null);
+  const [lunchEnabled, setLunchEnabled] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const supabase = createClient();
+    const loadSetting = async () => {
+      const { data } = await supabase
+        .from("restaurant_settings")
+        .select("lunch_service_enabled")
+        .single();
+      if (active) setLunchEnabled(data?.lunch_service_enabled === true);
+    };
+    void loadSetting();
+    const channel = supabase
+      .channel("service-control-settings")
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "restaurant_settings" },
+        () => void loadSetting(),
+      )
+      .subscribe();
+    return () => {
+      active = false;
+      void supabase.removeChannel(channel);
+    };
+  }, []);
 
   useEffect(() => {
     if (service) return;
@@ -95,7 +121,9 @@ export function ServiceControl({
                   "it-IT",
                   { hour: "2-digit", minute: "2-digit" },
                 ).format(new Date(service.opened_at))}`
-              : "Apri il pranzo o la cena prima di creare nuove comande."}
+              : lunchEnabled
+                ? "Apri il pranzo o la cena prima di creare nuove comande."
+                : "Apri la cena prima di creare nuove comande."}
           </p>
           {service && isPreviousService(service) && (
             <strong className="service-warning">
@@ -130,15 +158,21 @@ export function ServiceControl({
             </button>
           ) : (
             <>
+              {lunchEnabled && (
+                <button
+                  className="button button-primary"
+                  disabled={!canWrite || busy}
+                  onClick={() => void start("pranzo")}
+                >
+                  Inizia pranzo
+                </button>
+              )}
               <button
-                className="button button-primary"
-                disabled={!canWrite || busy}
-                onClick={() => void start("pranzo")}
-              >
-                Inizia pranzo
-              </button>
-              <button
-                className="button button-secondary"
+                className={
+                  lunchEnabled
+                    ? "button button-secondary"
+                    : "button button-primary"
+                }
                 disabled={!canWrite || busy}
                 onClick={() => void start("cena")}
               >

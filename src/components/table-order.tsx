@@ -441,7 +441,7 @@ export function TableOrder({
   }
   if (!order || (!takeawayMode && !table)) {
     const serviceMessage = !service
-      ? "La cassa deve iniziare pranzo o cena prima di aprire il tavolo."
+      ? "La cassa deve iniziare il servizio prima di aprire il tavolo."
       : isPreviousService(service)
         ? "Il servizio precedente deve essere chiuso dalla cassa prima di creare nuove comande."
         : null;

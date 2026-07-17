@@ -394,6 +394,23 @@ export function AdminDashboard() {
           <label>Coperto<input name="cover_charge" type="number" min="0" step="0.01" defaultValue={settings.cover_charge} required /></label>
           <label className="settings-switch">
             <span className="settings-switch-copy">
+              <strong>Servizio pranzo</strong>
+              <small>
+                Mostra il pranzo tra i turni che la Cassa può avviare e nei filtri
+                delle statistiche.
+              </small>
+            </span>
+            <span className="settings-switch-control">
+              <input
+                defaultChecked={settings.lunch_service_enabled}
+                name="lunch_service_enabled"
+                type="checkbox"
+              />
+              <span aria-hidden="true" />
+            </span>
+          </label>
+          <label className="settings-switch">
+            <span className="settings-switch-copy">
               <strong>Tavoli attivi per primi</strong>
               <small>
                 Sposta in cima i tavoli con una comanda aperta. Se disattivato,
@@ -634,6 +651,7 @@ export function AdminDashboard() {
     await execute(() => createClient().from("restaurant_settings").update({
       restaurant_name: String(data.get("restaurant_name")),
       cover_charge: Number(data.get("cover_charge")),
+      lunch_service_enabled: data.has("lunch_service_enabled"),
       sort_active_tables_first: data.has("sort_active_tables_first"),
       allergen_notice: String(data.get("allergen_notice")) || null,
       ticket_footer: String(data.get("ticket_footer")) || null,
