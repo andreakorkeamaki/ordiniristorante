@@ -18,7 +18,7 @@ test("la home porta al menu pubblico", async ({ page }) => {
   await page.getByPlaceholder("Cerca nel menu").fill("focaccia");
   await expect.poll(() => page.locator(".public-product").count()).toBeGreaterThan(0);
 
-  await page.getByRole("button", { name: "Cambia lingua" }).click();
+  await page.getByRole("button", { name: "Switch to English", exact: true }).click();
   await expect(page.getByPlaceholder("Search the menu")).toBeVisible();
 });
 
