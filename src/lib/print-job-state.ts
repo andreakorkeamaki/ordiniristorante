@@ -2,6 +2,16 @@ import type { PrintJob, PrintJobType } from "@/types/domain";
 
 export const PRINT_VERIFICATION_TIMEOUT_MS = 2 * 60 * 1000;
 
+const STABLE_PRINTNODE_STATES = new Set([
+  "new",
+  "sent_to_client",
+  "done",
+  "error",
+  "expired",
+]);
+
+const TERMINAL_PRINTNODE_STATES = new Set(["done", "error", "expired"]);
+
 export type PrintJobDisplayState =
   | "pending"
   | "printing"
@@ -86,11 +96,27 @@ export function shouldReconcileBeforeDispatch(job: PrintJob) {
   return Boolean(job.printnode_job_id);
 }
 
+export function isStablePrintNodeState(state: string) {
+  return STABLE_PRINTNODE_STATES.has(state);
+}
+
+export function isTerminalPrintNodeState(state: string) {
+  return TERMINAL_PRINTNODE_STATES.has(state);
+}
+
 export function getLatestStablePrintNodeState<T extends {
   state: string;
   createTimestamp: string;
 }>(states: T[]) {
-  return states.reduce<T | null>((latest, state) => {
+  const stableStates = states.filter((state) =>
+    isStablePrintNodeState(state.state),
+  );
+  const terminalStates = stableStates.filter((state) =>
+    isTerminalPrintNodeState(state.state),
+  );
+  const candidates = terminalStates.length ? terminalStates : stableStates;
+
+  return candidates.reduce<T | null>((latest, state) => {
     if (!latest) return state;
     return new Date(state.createTimestamp).getTime() >
       new Date(latest.createTimestamp).getTime()

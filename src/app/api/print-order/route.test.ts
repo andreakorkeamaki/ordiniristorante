@@ -50,7 +50,7 @@ vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: mocks.createAdminClient,
 }));
 
-import { POST } from "@/app/api/print-order/route";
+import { GET, POST } from "@/app/api/print-order/route";
 import { PrintNodeSubmissionError } from "@/lib/printnode";
 
 const order = {
@@ -282,6 +282,55 @@ describe("POST /api/print-order", () => {
 
     expect(response.status).toBe(503);
     expect(payload.outcome).toBe("database_unreachable");
+    expect(mocks.createPrintNodeJob).not.toHaveBeenCalled();
+  });
+
+  it("riconcilia done ignorando uno stato interno successivo senza reinviare", async () => {
+    const printingJob = {
+      ...job,
+      status: "printing" as const,
+      printnode_job_id: 987,
+    };
+    const builder = {
+      select: vi.fn(() => builder),
+      eq: vi.fn(() => builder),
+      not: vi.fn(() => builder),
+      order: vi.fn(() => builder),
+      range: vi.fn(async () => ({ data: [printingJob], error: null })),
+    };
+    mocks.createClient.mockResolvedValue({
+      from: vi.fn(() => builder),
+    });
+    const rpc = vi.fn(async () => ({ data: printingJob, error: null }));
+    mocks.createAdminClient.mockReturnValue({ rpc });
+    mocks.getPrintNodeJobStates.mockResolvedValue([
+      {
+        printJobId: 987,
+        state: "done",
+        message: null,
+        createTimestamp: "2026-07-06T10:01:02.000Z",
+      },
+      {
+        printJobId: 987,
+        state: "client_acknowledged",
+        message: null,
+        createTimestamp: "2026-07-06T10:01:03.000Z",
+      },
+    ]);
+
+    const response = await GET();
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.reconciled).toBe(1);
+    expect(rpc).toHaveBeenCalledWith(
+      "record_printnode_state",
+      expect.objectContaining({ p_job_id: job.id, p_state: "done" }),
+    );
+    expect(rpc).not.toHaveBeenCalledWith(
+      "record_printnode_state",
+      expect.objectContaining({ p_state: "client_acknowledged" }),
+    );
     expect(mocks.createPrintNodeJob).not.toHaveBeenCalled();
   });
 });
