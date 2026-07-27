@@ -125,7 +125,6 @@ function summaryUpdate(
 
 export async function startTranslationRun(admin: SupabaseClient) {
   const { data, error } = await admin
-    .schema("private")
     .from("menu_translation_runs")
     .insert({ status: "running" })
     .select("id")
@@ -145,7 +144,6 @@ export async function recordTranslationChange(
   translation: string,
 ) {
   const { error } = await admin
-    .schema("private")
     .from("menu_translation_changes")
     .insert({
       run_id: runId,
@@ -171,7 +169,6 @@ export async function completeTranslationRun(
   summary: TranslationRunSummary,
 ) {
   const { data, error } = await admin
-    .schema("private")
     .from("menu_translation_runs")
     .update(summaryUpdate(summary, "succeeded", null))
     .eq("id", runId)
@@ -191,7 +188,6 @@ export async function failTranslationRun(
   message: string,
 ) {
   await admin
-    .schema("private")
     .from("menu_translation_runs")
     .update(summaryUpdate(summary, "failed", message.slice(0, 1000)))
     .eq("id", runId)
@@ -202,7 +198,6 @@ export async function loadMenuTranslationHistory(limit = 30) {
   const { createAdminClient } = await import("@/lib/supabase/admin");
   const admin = createAdminClient();
   const { data: runData, error: runError } = await admin
-    .schema("private")
     .from("menu_translation_runs")
     .select("*")
     .order("started_at", { ascending: false })
@@ -221,7 +216,6 @@ export async function loadMenuTranslationHistory(limit = 30) {
   }
 
   const { data: changeData, error: changeError } = await admin
-    .schema("private")
     .from("menu_translation_changes")
     .select("*")
     .in(

@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import type { AppRole, Profile } from "@/types/domain";
 import { logout } from "@/app/staff/actions";
@@ -22,7 +23,15 @@ export function AppHeader({ profile }: { profile: Profile }) {
   return (
     <header className="app-header">
       <Link className="brand" href="/staff/tables">
-        <span className="brand-mark">LS</span>
+        <span className="brand-mark brand-mark-image" aria-hidden="true">
+          <Image
+            src="/images/la-sagretta-mark.png"
+            alt=""
+            width={40}
+            height={40}
+            priority
+          />
+        </span>
         <span>
           <strong>La Sagretta</strong>
           <small>{profile.full_name}</small>
