@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useConnection } from "@/components/connection-provider";
 import { formatCurrency } from "@/lib/format";
@@ -160,6 +161,7 @@ export function AdminDashboard() {
         ] as [Tab, string][]).map(([value, label]) => (
           <button className={tab === value ? "active" : ""} onClick={() => setTab(value)} key={value}>{label}</button>
         ))}
+        <Link href="/admin/traduzioni">Traduzioni</Link>
       </nav>
 
       <fieldset className="admin-write-scope" disabled={!canWrite || saving}>

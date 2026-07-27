@@ -1,5 +1,5 @@
 begin;
-select plan(202);
+select plan(218);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -9,6 +9,75 @@ select has_table('public', 'restaurant_services', 'restaurant services exist');
 select has_table('public', 'service_close_reports', 'service close reports exist');
 select has_table('private', 'menu_item_costs', 'menu item costs stay private');
 select has_table('private', 'menu_extra_costs', 'menu extra costs stay private');
+select has_table(
+  'private',
+  'menu_translation_runs',
+  'menu translation runs stay private'
+);
+select has_table(
+  'private',
+  'menu_translation_changes',
+  'menu translation changes stay private'
+);
+select has_index(
+  'private',
+  'menu_translation_runs',
+  'menu_translation_runs_started_at_idx',
+  'translation runs are indexed by start time'
+);
+select has_index(
+  'private',
+  'menu_translation_changes',
+  'menu_translation_changes_run_id_idx',
+  'translation changes are indexed by run'
+);
+select ok(
+  has_table_privilege(
+    'service_role',
+    'private.menu_translation_runs',
+    'SELECT'
+  )
+  and has_table_privilege(
+    'service_role',
+    'private.menu_translation_runs',
+    'INSERT'
+  )
+  and has_table_privilege(
+    'service_role',
+    'private.menu_translation_runs',
+    'UPDATE'
+  ),
+  'the server role can manage translation runs'
+);
+select ok(
+  has_table_privilege(
+    'service_role',
+    'private.menu_translation_changes',
+    'SELECT'
+  )
+  and has_table_privilege(
+    'service_role',
+    'private.menu_translation_changes',
+    'INSERT'
+  ),
+  'the server role can record translation changes'
+);
+select ok(
+  not has_table_privilege(
+    'authenticated',
+    'private.menu_translation_runs',
+    'SELECT'
+  ),
+  'browser sessions cannot read translation runs directly'
+);
+select ok(
+  not has_table_privilege(
+    'authenticated',
+    'private.menu_translation_changes',
+    'SELECT'
+  ),
+  'browser sessions cannot read translation changes directly'
+);
 select has_table(
   'private',
   'order_item_cost_snapshots',
@@ -61,6 +130,115 @@ select has_index(
   'print_jobs',
   'print_jobs_one_receipt_per_order_idx',
   'each order has one primary receipt job'
+);
+
+update public.menu_categories
+set
+  name_en = 'Old category name',
+  description = 'Descrizione aggiornata',
+  description_en = 'Old category description',
+  name = name || ' aggiornata'
+where id = '00000000-0000-4000-8000-000000000101';
+
+select is(
+  (
+    select name_en
+    from public.menu_categories
+    where id = '00000000-0000-4000-8000-000000000101'
+  ),
+  null::text,
+  'changing a category name invalidates its English translation'
+);
+select is(
+  (
+    select description_en
+    from public.menu_categories
+    where id = '00000000-0000-4000-8000-000000000101'
+  ),
+  null::text,
+  'changing a category description invalidates its English translation'
+);
+
+update public.menu_items
+set
+  name_en = 'Old item name',
+  description = 'Descrizione aggiornata',
+  description_en = 'Old item description',
+  ingredients = 'Ingredienti aggiornati',
+  ingredients_en = 'Old ingredients',
+  name = name || ' aggiornata'
+where id = '00000000-0000-4000-8000-000000001001';
+
+select is(
+  (
+    select name_en
+    from public.menu_items
+    where id = '00000000-0000-4000-8000-000000001001'
+  ),
+  null::text,
+  'changing an item name invalidates its English translation'
+);
+select is(
+  (
+    select description_en
+    from public.menu_items
+    where id = '00000000-0000-4000-8000-000000001001'
+  ),
+  null::text,
+  'changing an item description invalidates its English translation'
+);
+select is(
+  (
+    select ingredients_en
+    from public.menu_items
+    where id = '00000000-0000-4000-8000-000000001001'
+  ),
+  null::text,
+  'changing item ingredients invalidates their English translation'
+);
+
+update public.menu_extras
+set name_en = 'Old extra name', name = name || ' aggiornata'
+where id = '00000000-0000-4000-8000-000000001080';
+
+select is(
+  (
+    select name_en
+    from public.menu_extras
+    where id = '00000000-0000-4000-8000-000000001080'
+  ),
+  null::text,
+  'changing an extra name invalidates its English translation'
+);
+
+update public.restaurant_settings
+set
+  allergen_notice_en = 'Old allergen notice',
+  allergen_notice = allergen_notice || ' Aggiornato.'
+where id = '00000000-0000-0000-0000-000000000001';
+
+select is(
+  (
+    select allergen_notice_en
+    from public.restaurant_settings
+    where id = '00000000-0000-0000-0000-000000000001'
+  ),
+  null::text,
+  'changing the allergen notice invalidates its English translation'
+);
+
+update public.menu_items
+set name_en = 'Still valid', price = price + 0.01
+where id = '00000000-0000-4000-8000-000000001002';
+
+select is(
+  (
+    select name_en
+    from public.menu_items
+    where id = '00000000-0000-4000-8000-000000001002'
+  ),
+  'Still valid',
+  'changing unrelated item data preserves the English translation'
 );
 select has_index(
   'public',
