@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   getCurrentProfile: vi.fn(),
   createPrintNodeJob: vi.fn(),
   getPrinterAvailability: vi.fn(),
+  reconcileServicePrintJobs: vi.fn(),
+  closeServiceRpc: vi.fn(),
   createClient: vi.fn(),
   createAdminClient: vi.fn(),
 }));
@@ -31,6 +33,9 @@ vi.mock("@/lib/printnode", () => {
 vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.createClient }));
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: mocks.createAdminClient,
+}));
+vi.mock("@/lib/service-close-print-reconciliation", () => ({
+  reconcileServicePrintJobs: mocks.reconcileServicePrintJobs,
 }));
 
 import { GET, POST } from "@/app/api/close-service/route";
@@ -192,14 +197,18 @@ describe("/api/close-service", () => {
       active: true,
       role: "cashier",
     });
-    mocks.createClient.mockResolvedValue({
-      rpc: vi.fn(async () => ({ data: service, error: null })),
-    });
+    mocks.closeServiceRpc.mockResolvedValue({ data: service, error: null });
+    mocks.createClient.mockResolvedValue({ rpc: mocks.closeServiceRpc });
     mocks.getPrinterAvailability.mockResolvedValue({
       available: true,
       message: "Stampante online",
     });
     mocks.createPrintNodeJob.mockResolvedValue({ id: 321, recovered: false });
+    mocks.reconcileServicePrintJobs.mockResolvedValue({
+      checked: 0,
+      reconciled: 0,
+      updateErrors: 0,
+    });
   });
 
   it("chiude il servizio, salva lo snapshot e invia una sola copia", async () => {
@@ -221,6 +230,14 @@ describe("/api/close-service", () => {
         idempotencyKey: `${service.id}:service-close-summary`,
       }),
     );
+    expect(mocks.reconcileServicePrintJobs).toHaveBeenCalledWith(
+      expect.anything(),
+      service.id,
+      service.opened_by,
+    );
+    expect(
+      mocks.reconcileServicePrintJobs.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.closeServiceRpc.mock.invocationCallOrder[0]);
     expect(getReport()).toMatchObject({
       dine_in_count: 1,
       cover_count: 4,
@@ -264,6 +281,7 @@ describe("/api/close-service", () => {
 
     expect(response.status).toBe(200);
     expect(mocks.createClient).not.toHaveBeenCalled();
+    expect(mocks.reconcileServicePrintJobs).not.toHaveBeenCalled();
     expect(mocks.createPrintNodeJob).toHaveBeenCalledWith(
       expect.objectContaining({
         copies: 1,
@@ -290,6 +308,7 @@ describe("/api/close-service", () => {
       },
     });
     expect(mocks.createClient).not.toHaveBeenCalled();
+    expect(mocks.reconcileServicePrintJobs).not.toHaveBeenCalled();
     expect(mocks.getPrinterAvailability).not.toHaveBeenCalled();
     expect(mocks.createPrintNodeJob).not.toHaveBeenCalled();
     expect(getReport()).toMatchObject({

@@ -111,4 +111,40 @@ describe("print job recovery state", () => {
       ])?.state,
     ).toBe("done");
   });
+
+  it("ignora gli stati interni PrintNode successivi a done", () => {
+    expect(
+      getLatestStablePrintNodeState([
+        { state: "new", createTimestamp: "2026-07-02T10:00:00.000Z" },
+        { state: "done", createTimestamp: "2026-07-02T10:00:02.000Z" },
+        {
+          state: "client_acknowledged",
+          createTimestamp: "2026-07-02T10:00:03.000Z",
+        },
+      ])?.state,
+    ).toBe("done");
+  });
+
+  it("mantiene terminale done anche con uno stato non terminale più recente", () => {
+    expect(
+      getLatestStablePrintNodeState([
+        { state: "done", createTimestamp: "2026-07-02T10:00:02.000Z" },
+        {
+          state: "sent_to_client",
+          createTimestamp: "2026-07-02T10:00:03.000Z",
+        },
+      ])?.state,
+    ).toBe("done");
+  });
+
+  it("non aggiorna il database quando PrintNode restituisce solo stati interni", () => {
+    expect(
+      getLatestStablePrintNodeState([
+        {
+          state: "client_acknowledged",
+          createTimestamp: "2026-07-02T10:00:03.000Z",
+        },
+      ]),
+    ).toBeNull();
+  });
 });

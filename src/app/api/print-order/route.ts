@@ -694,21 +694,18 @@ async function reconcilePrintJobs(
 
   try {
     const states = await getPrintNodeJobStates(ids);
-    const latestById = new Map<number, (typeof states)[number]>();
+    const statesById = new Map<number, typeof states>();
     for (const state of states) {
-      const current = latestById.get(state.printJobId);
-      if (
-        !current ||
-        new Date(state.createTimestamp).getTime() >
-          new Date(current.createTimestamp).getTime()
-      ) {
-        latestById.set(state.printJobId, state);
-      }
+      const current = statesById.get(state.printJobId);
+      if (current) current.push(state);
+      else statesById.set(state.printJobId, [state]);
     }
 
     let updatedCount = 0;
     for (const job of jobs) {
-      const latest = latestById.get(Number(job.printnode_job_id));
+      const latest = getLatestStablePrintNodeState(
+        statesById.get(Number(job.printnode_job_id)) ?? [],
+      );
       if (!latest) continue;
       const { error } = await supabase.rpc("record_printnode_state", {
         p_job_id: job.id,

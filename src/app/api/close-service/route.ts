@@ -6,6 +6,7 @@ import {
   buildRaw80mmServiceCloseReport,
   buildServiceCloseReportSnapshot,
 } from "@/lib/service-close-report";
+import { reconcileServicePrintJobs } from "@/lib/service-close-print-reconciliation";
 import {
   createPrintNodeJob,
   getPrinterAvailability,
@@ -167,6 +168,33 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: "Servizio dati non disponibile" },
       { status: 503 },
+    );
+  }
+
+  try {
+    const reconciliation = await reconcileServicePrintJobs(
+      admin,
+      parsed.data.serviceId,
+      profile.id,
+    );
+    console.info(
+      JSON.stringify({
+        scope: "service_close",
+        event: "preclose_print_jobs_reconciled",
+        service_id: parsed.data.serviceId,
+        actor_id: profile.id,
+        ...reconciliation,
+      }),
+    );
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        scope: "service_close",
+        event: "preclose_print_jobs_reconciliation_failed",
+        service_id: parsed.data.serviceId,
+        actor_id: profile.id,
+        error: error instanceof Error ? error.message : "Errore sconosciuto",
+      }),
     );
   }
 
