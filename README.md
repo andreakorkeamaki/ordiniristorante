@@ -128,7 +128,7 @@ Il cron Vercel definito in `vercel.json` richiama ogni giorno alle 02:15 UTC
 - restituisce nei log il consumo effettivo di token OpenAI;
 - interrompe il batch se lettura, aggiornamento o verifica non sono affidabili.
 
-Ogni esecuzione viene registrata nelle tabelle private
+Ogni esecuzione viene registrata nelle tabelle audit protette da RLS
 `menu_translation_runs` e `menu_translation_changes`. La pagina
 `/admin/traduzioni`, accessibile soltanto agli amministratori, mostra il
 riepilogo del giorno, lo stato dell'ultimo controllo, i token consumati e ogni

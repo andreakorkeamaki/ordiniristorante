@@ -10,23 +10,23 @@ select has_table('public', 'service_close_reports', 'service close reports exist
 select has_table('private', 'menu_item_costs', 'menu item costs stay private');
 select has_table('private', 'menu_extra_costs', 'menu extra costs stay private');
 select has_table(
-  'private',
+  'public',
   'menu_translation_runs',
-  'menu translation runs stay private'
+  'menu translation runs are available to the server API'
 );
 select has_table(
-  'private',
+  'public',
   'menu_translation_changes',
-  'menu translation changes stay private'
+  'menu translation changes are available to the server API'
 );
 select has_index(
-  'private',
+  'public',
   'menu_translation_runs',
   'menu_translation_runs_started_at_idx',
   'translation runs are indexed by start time'
 );
 select has_index(
-  'private',
+  'public',
   'menu_translation_changes',
   'menu_translation_changes_run_id_idx',
   'translation changes are indexed by run'
@@ -34,17 +34,17 @@ select has_index(
 select ok(
   has_table_privilege(
     'service_role',
-    'private.menu_translation_runs',
+    'public.menu_translation_runs',
     'SELECT'
   )
   and has_table_privilege(
     'service_role',
-    'private.menu_translation_runs',
+    'public.menu_translation_runs',
     'INSERT'
   )
   and has_table_privilege(
     'service_role',
-    'private.menu_translation_runs',
+    'public.menu_translation_runs',
     'UPDATE'
   ),
   'the server role can manage translation runs'
@@ -52,12 +52,12 @@ select ok(
 select ok(
   has_table_privilege(
     'service_role',
-    'private.menu_translation_changes',
+    'public.menu_translation_changes',
     'SELECT'
   )
   and has_table_privilege(
     'service_role',
-    'private.menu_translation_changes',
+    'public.menu_translation_changes',
     'INSERT'
   ),
   'the server role can record translation changes'
@@ -65,7 +65,7 @@ select ok(
 select ok(
   not has_table_privilege(
     'authenticated',
-    'private.menu_translation_runs',
+    'public.menu_translation_runs',
     'SELECT'
   ),
   'browser sessions cannot read translation runs directly'
@@ -73,7 +73,7 @@ select ok(
 select ok(
   not has_table_privilege(
     'authenticated',
-    'private.menu_translation_changes',
+    'public.menu_translation_changes',
     'SELECT'
   ),
   'browser sessions cannot read translation changes directly'
