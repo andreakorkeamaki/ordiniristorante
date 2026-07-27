@@ -11,6 +11,8 @@ Web app mobile-first per menu QR, comande staff, cassa e amministrazione. Next.j
 - `/staff/order/[id]`: comanda asporto con nome cliente e ora di ritiro.
 - `/cassa`: coda realtime, preview ticket 80 mm, stampa browser e chiusura ordine.
 - `/admin`: menu, disponibilità, extra, tavoli e impostazioni del locale.
+- `/admin/traduzioni`: stato giornaliero, storico e dettaglio italiano/inglese
+  delle traduzioni automatiche.
 - `/admin/statistiche`: dashboard admin con incassi, servizi, prodotti più venduti,
   costi registrati e margine lordo.
 
@@ -50,6 +52,9 @@ Nel file `.env.local` inserire:
 NEXT_PUBLIC_SUPABASE_URL=https://lnckmyfillppaachcluz.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 SUPABASE_SECRET_KEY=sb_secret_...
+OPENAI_API_KEY=sk-proj_...
+OPENAI_TRANSLATION_MODEL=gpt-5.6-luna
+CRON_SECRET=segreto_casuale_lungo
 NEXT_PUBLIC_MENU_ORIGIN=https://menu.example.it
 NEXT_PUBLIC_APP_ORIGIN=https://ordini.example.it
 PRINTNODE_API_KEY=printnode_server_only_api_key
@@ -60,6 +65,10 @@ La publishable key è progettata per il client ed è protetta da RLS. La
 `SUPABASE_SECRET_KEY` è usata soltanto dalle route server per registrare gli
 esiti verificati con PrintNode. Non aggiungere mai secret key o `service_role`
 a variabili `NEXT_PUBLIC_*`.
+
+`OPENAI_API_KEY` e `CRON_SECRET` sono anch'essi esclusivamente server-side.
+Non devono mai avere il prefisso `NEXT_PUBLIC_` né essere salvati nel
+repository.
 Anche `PRINTNODE_API_KEY` e `PRINTNODE_PRINTER_ID` sono variabili esclusivamente
 server-side: non devono avere il prefisso `NEXT_PUBLIC_`.
 
@@ -104,6 +113,47 @@ supabase config push
 ```
 
 Il progetto di sviluppo attuale ha già migration, seed e configurazione Auth applicati. Il signup pubblico è disabilitato globalmente; il provider email resta attivo perché login e recupero password devono funzionare. Non eseguire `db reset` su un database che contiene dati reali e non rieseguire manualmente una migration già registrata.
+
+### Traduzioni inglesi automatiche
+
+Il cron Vercel definito in `vercel.json` richiama ogni giorno alle 02:15 UTC
+`/api/cron/translate-menu`. La route:
+
+- accetta soltanto richieste autenticate con `CRON_SECRET`;
+- legge con la chiave server Supabase esclusivamente i campi traducibili;
+- invia a OpenAI al massimo 20 campi per esecuzione;
+- aggiorna soltanto campi inglesi ancora nulli o vuoti;
+- non modifica mai testi italiani o altri dati del menu;
+- usa condizioni concorrenti e rilegge ogni record dopo la scrittura;
+- restituisce nei log il consumo effettivo di token OpenAI;
+- interrompe il batch se lettura, aggiornamento o verifica non sono affidabili.
+
+Ogni esecuzione viene registrata nelle tabelle private
+`menu_translation_runs` e `menu_translation_changes`. La pagina
+`/admin/traduzioni`, accessibile soltanto agli amministratori, mostra il
+riepilogo del giorno, lo stato dell'ultimo controllo, i token consumati e ogni
+testo italiano con la traduzione inglese effettivamente salvata. Anche le
+esecuzioni senza modifiche e gli errori restano visibili nello storico; i log
+Vercel contengono inoltre un riepilogo strutturato della singola esecuzione.
+
+I trigger della migration `invalidate_stale_menu_translations` impostano a
+`null` la traduzione inglese corrispondente ogni volta che cambia il testo
+italiano. In questo modo il menu non mostra mai una traduzione obsoleta: fino
+al cron successivo usa il testo italiano come fallback, poi salva la nuova
+traduzione inglese. Le modifiche a prezzi, disponibilità, ordinamento o altri
+campi non invalidano le traduzioni.
+
+I campi coperti sono:
+
+- `menu_categories.name_en`, `menu_categories.description_en`;
+- `menu_items.name_en`, `menu_items.description_en`,
+  `menu_items.ingredients_en`;
+- `menu_extras.name_en`;
+- `restaurant_settings.allergen_notice_en`.
+
+Il modello predefinito è `gpt-5.6-luna`; può essere cambiato impostando
+`OPENAI_TRANSLATION_MODEL`. I cron Vercel vengono eseguiti soltanto sui
+deployment di produzione.
 
 Per verificare il database remoto:
 

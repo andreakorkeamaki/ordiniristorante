@@ -1278,18 +1278,27 @@ code {
 }
 
 .category-tabs button,
-.admin-tabs button {
+.admin-tabs button,
+.admin-tabs a,
+.admin-tabs > span {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 0.55rem 0.75rem;
   border: 1px solid var(--line);
   border-radius: 999px;
+  color: var(--ink);
   background: transparent;
   font-size: 0.78rem;
   font-weight: 750;
+  text-decoration: none;
 }
 
 .category-tabs button.active,
-.admin-tabs button.active {
+.admin-tabs button.active,
+.admin-tabs a.active,
+.admin-tabs > span.active {
   border-color: var(--red);
   color: #fff;
   background: var(--red);
@@ -2462,6 +2471,268 @@ button.cashier-table-summary {
   margin-bottom: 1rem;
 }
 
+.translation-workspace {
+  display: grid;
+  gap: 1rem;
+}
+
+.translation-workspace .admin-tabs {
+  margin-bottom: 0;
+}
+
+.translation-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.translation-schedule {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.8rem;
+  background: rgb(255 253 248 / 72%);
+}
+
+.translation-schedule span,
+.translation-latest-body span,
+.translation-metric span {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.translation-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.translation-metric {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  background: var(--surface);
+  box-shadow: 0 5px 18px rgb(45 31 18 / 4%);
+}
+
+.translation-metric > strong {
+  font-family: var(--font-display);
+  font-size: clamp(1.8rem, 3vw, 2.7rem);
+  line-height: 1;
+}
+
+.translation-metric.is-danger {
+  border-color: #dfaaa1;
+  background: #fff0ed;
+}
+
+.translation-latest {
+  padding-bottom: 0;
+}
+
+.translation-latest-body {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.translation-latest-body > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.translation-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: max-content;
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  color: #3d5c45;
+  background: #e4f0e9;
+  font-size: 0.7rem;
+  font-weight: 850;
+}
+
+.translation-status i {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.translation-status.is-failed {
+  color: #8f2a1c;
+  background: #fff0ed;
+}
+
+.translation-status.is-running {
+  color: #76510e;
+  background: #fff3d8;
+}
+
+.translation-history {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.translation-section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.translation-section-heading h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(1.65rem, 3vw, 2.2rem);
+}
+
+.translation-section-heading > span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.translation-run-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.translation-run {
+  padding-bottom: 0;
+}
+
+.translation-run summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.translation-run summary::-webkit-details-marker {
+  display: none;
+}
+
+.translation-run summary::after {
+  content: "＋";
+  color: var(--red);
+  font-size: 1.25rem;
+  font-weight: 900;
+}
+
+.translation-run[open] summary::after {
+  content: "−";
+}
+
+.translation-run summary > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.translation-run-summary {
+  display: flex;
+  gap: 1rem;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.translation-run-summary b {
+  color: var(--ink);
+}
+
+.translation-run-body {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.translation-run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.translation-run-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #dfaaa1;
+  border-radius: 0.65rem;
+  color: #8f2a1c;
+  background: #fff0ed;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.translation-change-list {
+  display: grid;
+  border-top: 1px solid var(--line);
+}
+
+.translation-change {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.35fr) minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.translation-change:last-child {
+  border-bottom: 0;
+}
+
+.translation-change-label {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.translation-change-label span,
+.translation-change small {
+  color: var(--red);
+  font-size: 0.66rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.translation-change p {
+  margin: 0.12rem 0 0;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.translation-arrow {
+  color: var(--red);
+  font-size: 1.2rem;
+  font-weight: 900;
+}
+
+.translation-empty {
+  margin: 0;
+  padding: 1rem;
+  color: var(--muted);
+}
+
+.translation-empty.compact {
+  padding: 0.25rem 0;
+}
+
 .admin-write-scope {
   min-width: 0;
   margin: 0;
@@ -2946,6 +3217,24 @@ button.cashier-table-summary {
     grid-template-columns: 1fr;
   }
 
+  .translation-metrics,
+  .translation-latest-body {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .translation-heading {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .translation-change {
+    grid-template-columns: minmax(7rem, 0.35fr) minmax(0, 1fr);
+  }
+
+  .translation-arrow {
+    display: none;
+  }
+
   .order-panel {
     position: static;
   }
@@ -3172,12 +3461,34 @@ button.cashier-table-summary {
   .stepper.small button,
   .danger-link,
   .admin-tabs button,
+  .admin-tabs a,
+  .admin-tabs > span,
   .admin-row button,
   .row-actions button,
   .card-actions button,
   .cashier-table-summary,
   .cashier-table-reprint {
     min-height: 2.75rem;
+  }
+
+  .translation-metrics,
+  .translation-latest-body {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .translation-run summary {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .translation-run-summary {
+    width: 100%;
+    flex-wrap: wrap;
+    margin-left: 0;
+  }
+
+  .translation-change {
+    grid-template-columns: 1fr;
   }
 
   .stepper {
