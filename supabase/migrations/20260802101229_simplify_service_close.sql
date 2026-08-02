@@ -149,15 +149,15 @@ begin
       )
     );
 
-  if blocked_orders > 0 then
-    raise exception
-      'Ci sono ancora % ordini da completare o inviare in stampa',
-      blocked_orders;
-  end if;
   if blocking_jobs > 0 then
     raise exception
       'Ci sono ancora % stampe in corso o da verificare',
       blocking_jobs;
+  end if;
+  if blocked_orders > 0 then
+    raise exception
+      'Ci sono ancora % ordini da completare o inviare in stampa',
+      blocked_orders;
   end if;
 
   update public.print_jobs as candidate_job
