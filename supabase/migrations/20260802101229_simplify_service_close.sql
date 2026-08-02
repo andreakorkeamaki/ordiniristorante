@@ -89,6 +89,7 @@ declare
   target_service public.restaurant_services;
   blocked_orders integer;
   blocking_jobs integer;
+  unsafe_jobs integer;
   result public.restaurant_services;
   active_order record;
 begin
@@ -149,15 +150,45 @@ begin
       )
     );
 
-  if blocking_jobs > 0 then
+  select count(*)::integer into unsafe_jobs
+  from public.print_jobs as candidate_job
+  where candidate_job.order_id in (
+    select id from public.orders where service_id = p_service_id
+  )
+    and candidate_job.status in ('pending', 'printing', 'failed')
+    and not (
+      candidate_job.status in ('pending', 'failed')
+      and candidate_job.printnode_job_id is null
+      and candidate_job.submitted_at is null
+      and candidate_job.verification_required_at is null
+      and exists (
+        select 1
+        from public.orders as completed_order
+        where completed_order.id = candidate_job.order_id
+          and completed_order.status in ('closed', 'cancelled')
+      )
+    )
+    and (
+      candidate_job.status = 'printing'
+      or candidate_job.verification_required_at is not null
+      or candidate_job.printnode_job_id is not null
+      or candidate_job.submitted_at is not null
+    );
+
+  if unsafe_jobs > 0 then
     raise exception
       'Ci sono ancora % stampe in corso o da verificare',
-      blocking_jobs;
+      unsafe_jobs;
   end if;
   if blocked_orders > 0 then
     raise exception
       'Ci sono ancora % ordini da completare o inviare in stampa',
       blocked_orders;
+  end if;
+  if blocking_jobs > 0 then
+    raise exception
+      'Ci sono ancora % stampe da completare o risolvere',
+      blocking_jobs;
   end if;
 
   update public.print_jobs as candidate_job
