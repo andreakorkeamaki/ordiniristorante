@@ -106,7 +106,12 @@ export async function POST(request: Request) {
     );
   }
   const order = orderResult.order;
-  const isReceiptReprint = parsed.data.action === "reprint";
+  const isClosedReceiptDispatch =
+    order.status === "closed" &&
+    parsed.data.action === "dispatch" &&
+    parsed.data.jobId !== undefined;
+  const isReceiptReprint =
+    parsed.data.action === "reprint" || isClosedReceiptDispatch;
   if (order.status === "closed" && !isReceiptReprint) {
     return NextResponse.json({ closed: true, idempotent: true, copies: 1 });
   }

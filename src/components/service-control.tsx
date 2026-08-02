@@ -45,8 +45,6 @@ export function ServiceControl({
     orders: Record<string, number>;
     jobs: Record<string, number>;
   } | null>(null);
-  const [forceReason, setForceReason] = useState("");
-  const [forceAccepted, setForceAccepted] = useState(false);
   const [closeReport, setCloseReport] = useState<CloseReportNotice | null>(null);
   const [lunchEnabled, setLunchEnabled] = useState(false);
 
@@ -149,8 +147,6 @@ export function ServiceControl({
               onClick={() => {
                 setConfirmClose(true);
                 setBlockers(null);
-                setForceReason("");
-                setForceAccepted(false);
                 void loadBlockers();
               }}
             >
@@ -221,43 +217,31 @@ export function ServiceControl({
             <p className="eyebrow">Fine servizio</p>
             <h2>Chiudere {formatServiceLabel(service)}?</h2>
             <p>
-              La chiusura sicura blocca solo bozze non inviate o stampe da
-              risolvere. Le comande già stampate verranno chiuse
-              automaticamente.
+              Le comande già stampate verranno chiuse automaticamente. Le
+              ristampe mai partite dei tavoli già chiusi verranno archiviate
+              senza bloccare la chiusura.
             </p>
             <p>
-              Al termine verrà salvato il riepilogo per tavolo e asporti e ne
-              verrà stampata una sola copia.
+              Se una stampa è davvero in corso o da verificare, ti verrà
+              indicato chiaramente cosa risolvere. Al termine verrà salvato il
+              riepilogo e ne verrà stampata una sola copia.
             </p>
             {blockers && (
               <div className="service-blockers" role="status">
-                <strong>Blocchi attuali</strong>
-                <p>
-                  Ordini: {formatCounts(blockers.orders)} · Job:{" "}
-                  {formatCounts(blockers.jobs)}
-                </p>
+                <strong>
+                  {hasBlockers(blockers)
+                    ? "Da risolvere prima di chiudere"
+                    : "Tutto pronto"}
+                </strong>
+                {hasBlockers(blockers) ? (
+                  <p>
+                    Ordini: {formatCounts(blockers.orders)} · Stampe:{" "}
+                    {formatCounts(blockers.jobs)}
+                  </p>
+                ) : (
+                  <p>Nessun ordine o stampa blocca la chiusura.</p>
+                )}
               </div>
-            )}
-            {blockers && hasForceableBlockers(blockers) && (
-              <>
-                <label className="retry-reason">
-                  Motivazione della chiusura forzata
-                  <textarea
-                    value={forceReason}
-                    maxLength={500}
-                    onChange={(event) => setForceReason(event.target.value)}
-                  />
-                </label>
-                <label className="risk-confirmation">
-                  <input
-                    type="checkbox"
-                    checked={forceAccepted}
-                    onChange={(event) => setForceAccepted(event.target.checked)}
-                  />
-                  Confermo la chiusura anche con bozze o stampe non risolte e
-                  che la motivazione resterà auditata.
-                </label>
-              </>
             )}
             <div className="modal-actions">
               <button
@@ -270,25 +254,10 @@ export function ServiceControl({
               <button
                 className="button button-danger"
                 disabled={!canWrite || busy}
-                onClick={() => void close(false)}
+                onClick={() => void close()}
               >
-                {busy ? "Chiusura…" : "Chiudi e stampa 1 copia"}
+                {busy ? "Chiusura…" : "Chiudi servizio"}
               </button>
-              {blockers &&
-                hasForceableBlockers(blockers) && (
-                  <button
-                    className="button button-danger"
-                    disabled={
-                      !canWrite ||
-                      busy ||
-                      !forceAccepted ||
-                      forceReason.trim().length < 10
-                    }
-                    onClick={() => void close(true)}
-                  >
-                    Forza chiusura con motivazione
-                  </button>
-                )}
             </div>
           </section>
         </div>
@@ -333,7 +302,7 @@ export function ServiceControl({
     );
   }
 
-  async function close(force: boolean) {
+  async function close() {
     if (!service || !canWrite || busy) return;
     setBusy(true);
     setMessage("");
@@ -344,8 +313,6 @@ export function ServiceControl({
         body: JSON.stringify({
           action: "close",
           serviceId: service.id,
-          force,
-          reason: force ? forceReason.trim() : null,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as {
@@ -472,24 +439,6 @@ export function ServiceControl({
   }
 }
 
-function countValues(counts: Record<string, number>) {
-  return Object.values(counts).reduce((total, count) => total + count, 0);
-}
-
-function countUnsafeJobs(counts: Record<string, number>) {
-  return (counts.printing ?? 0) + (counts.uncertain ?? 0);
-}
-
-function hasForceableBlockers(blockers: {
-  orders: Record<string, number>;
-  jobs: Record<string, number>;
-}) {
-  return (
-    countValues(blockers.orders) + countValues(blockers.jobs) > 0 &&
-    countUnsafeJobs(blockers.jobs) === 0
-  );
-}
-
 function formatCounts(counts: Record<string, number>) {
   const entries = Object.entries(counts).filter(([, count]) => count > 0);
   return entries.length
@@ -497,6 +446,15 @@ function formatCounts(counts: Record<string, number>) {
         .map(([status, count]) => `${countLabel(status)} ${count}`)
         .join(", ")
     : "nessuno";
+}
+
+function hasBlockers(blockers: {
+  orders: Record<string, number>;
+  jobs: Record<string, number>;
+}) {
+  return [...Object.values(blockers.orders), ...Object.values(blockers.jobs)].some(
+    (count) => count > 0,
+  );
 }
 
 function countLabel(status: string) {

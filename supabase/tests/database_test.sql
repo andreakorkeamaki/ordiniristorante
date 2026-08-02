@@ -1,5 +1,5 @@
 begin;
-select plan(218);
+select plan(222);
 
 select has_table('public', 'orders', 'orders exists');
 select has_table('public', 'order_items', 'order_items exists');
@@ -1735,13 +1735,12 @@ select throws_ok(
   $$
     select public.close_service(
       (select id from public.restaurant_services where closed_at is null),
-      true,
-      'Tentativo forzato con job ancora in stampa'
+      false
     )
   $$,
   'P0001',
-  'Ci sono 1 job in stampa o da verificare',
-  'service closure cannot hide a printing job even when forced'
+  'Ci sono ancora 1 stampe in corso o da verificare',
+  'service closure cannot hide a print job that may already be running'
 );
 select lives_ok(
   $$
@@ -2023,6 +2022,85 @@ select throws_ok(
 );
 
 rollback to savepoint safe_service_close_draft_blocker_tests;
+
+savepoint service_close_unsent_print_cleanup_tests;
+
+update public.print_jobs
+set status = 'printed',
+    printed_at = coalesce(printed_at, now())
+where order_id in (
+    select id
+    from public.orders
+    where service_id = (
+      select id from public.restaurant_services where closed_at is null
+    )
+  )
+  and status in ('pending', 'failed');
+
+select set_config('appordini.printnode_state_transition', 'on', true);
+update public.orders
+set status = 'closed',
+    closed_at = now()
+where id = '00000000-0000-4000-9000-000000009922';
+select set_config('appordini.printnode_state_transition', 'off', true);
+
+insert into public.print_jobs(
+  order_id,
+  job_type,
+  idempotency_key,
+  status,
+  copies,
+  labels,
+  created_by
+) values (
+  '00000000-0000-4000-9000-000000009922',
+  'reprint',
+  '00000000-0000-4000-9000-000000009922:reprint:unsent-close-test',
+  'pending',
+  3,
+  '["RISTAMPA"]'::jsonb,
+  '00000000-0000-4000-9000-000000009901'
+);
+
+select is(
+  public.get_service_close_blockers(
+    (select id from public.restaurant_services where closed_at is null)
+  ) -> 'jobs',
+  '{}'::jsonb,
+  'a print request that never reached PrintNode does not block service closure'
+);
+select lives_ok(
+  $$
+    select public.close_service(
+      (select id from public.restaurant_services where closed_at is null),
+      false
+    )
+  $$,
+  'service closure automatically resolves a print request that was never sent'
+);
+select is(
+  (
+    select status::text
+    from public.print_jobs
+    where idempotency_key =
+      '00000000-0000-4000-9000-000000009922:reprint:unsent-close-test'
+  ),
+  'cancelled',
+  'the unsent print request is retained and marked cancelled for audit'
+);
+select is(
+  (
+    select forced_close
+    from public.restaurant_services
+    where closed_at is not null
+    order by closed_at desc
+    limit 1
+  ),
+  false,
+  'automatic cleanup is recorded as a normal service closure'
+);
+
+rollback to savepoint service_close_unsent_print_cleanup_tests;
 
 update public.print_jobs
 set status = 'printed',
