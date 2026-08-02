@@ -29,8 +29,6 @@ const bodySchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("close"),
     serviceId: z.uuid(),
-    force: z.boolean().default(false),
-    reason: z.string().trim().max(500).nullable().optional(),
   }),
   z.object({
     action: z.literal("reprint"),
@@ -202,8 +200,8 @@ export async function POST(request: Request) {
     "close_service",
     {
       p_service_id: parsed.data.serviceId,
-      p_force: parsed.data.force,
-      p_reason: parsed.data.force ? parsed.data.reason?.trim() || null : null,
+      p_force: false,
+      p_reason: null,
     },
   );
   if (closeError || !closedData) {

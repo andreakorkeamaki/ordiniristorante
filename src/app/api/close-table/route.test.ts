@@ -152,9 +152,11 @@ function supabaseMock(options?: {
       return builder;
     }
     const builder = {
+      select: vi.fn(() => builder),
       update: vi.fn(() => builder),
       eq: vi.fn(() => builder),
       is: vi.fn(() => builder),
+      maybeSingle: vi.fn(async () => ({ data: currentJob, error: null })),
     };
     return builder;
   });
@@ -254,6 +256,44 @@ describe("POST /api/close-table", () => {
       reprinted: true,
       outcome: "reprinted",
       copies: 1,
+    });
+  });
+
+  it("invia un job di ristampa già pendente anche se il tavolo è chiuso", async () => {
+    const closedOrder = { ...order, status: "closed" } as Order;
+    const pendingRetry = {
+      ...receiptJob,
+      id: "00000000-0000-4000-8000-000000000011",
+      idempotency_key: `${order.id}:receipt:retry:pending`,
+      retry_of_job_id: receiptJob.id,
+      attempt_number: 2,
+    } as PrintJob;
+    const supabase = supabaseMock({
+      currentOrder: closedOrder,
+      job: pendingRetry,
+    });
+    mocks.loadOrderForPrint.mockResolvedValue({ ok: true, order: closedOrder });
+    mocks.createClient.mockResolvedValue(supabase);
+
+    const response = await POST(request({
+      action: "dispatch",
+      orderId: order.id,
+      jobId: pendingRetry.id,
+    }));
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(supabase.from).toHaveBeenCalledWith("print_jobs");
+    expect(mocks.createPrintNodeJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: pendingRetry.idempotency_key,
+        copies: 1,
+      }),
+    );
+    expect(payload).toMatchObject({
+      closed: true,
+      reprinted: true,
+      outcome: "reprinted",
     });
   });
 
