@@ -1103,8 +1103,28 @@ export function CashierDashboard() {
         closed?: boolean;
         copies?: number;
         idempotent?: boolean;
+        reprinted?: boolean;
+        outcome?: string;
         job?: PrintJob;
       };
+
+      if (receiptJob && order.status === "closed") {
+        if (!payload.reprinted) {
+          if (payload.job) {
+            setReceiptTarget({ order, job: payload.job });
+          }
+          setMessage(
+            payload.message ??
+              payload.error ??
+              "Ristampa presa in carico: attendi la conferma della stampante.",
+          );
+          return;
+        }
+
+        setReceiptTarget(null);
+        setMessage("Conto finale ristampato in una copia.");
+        return;
+      }
 
       if (!payload.closed) {
         if (payload.job) {

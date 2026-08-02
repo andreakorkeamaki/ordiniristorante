@@ -214,7 +214,7 @@ describe("/api/close-service", () => {
   it("chiude il servizio, salva lo snapshot e invia una sola copia", async () => {
     const { getReport } = adminMock();
     const response = await POST(
-      request({ action: "close", serviceId: service.id, force: false }),
+      request({ action: "close", serviceId: service.id }),
     );
     const payload = await response.json();
 
@@ -235,6 +235,11 @@ describe("/api/close-service", () => {
       service.id,
       service.opened_by,
     );
+    expect(mocks.closeServiceRpc).toHaveBeenCalledWith("close_service", {
+      p_service_id: service.id,
+      p_force: false,
+      p_reason: null,
+    });
     expect(
       mocks.reconcileServicePrintJobs.mock.invocationCallOrder[0],
     ).toBeLessThan(mocks.closeServiceRpc.mock.invocationCallOrder[0]);
@@ -254,7 +259,7 @@ describe("/api/close-service", () => {
     });
 
     const response = await POST(
-      request({ action: "close", serviceId: service.id, force: false }),
+      request({ action: "close", serviceId: service.id }),
     );
     const payload = await response.json();
 
