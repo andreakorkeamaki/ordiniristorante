@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConnection } from "@/components/connection-provider";
+import { useCoalescedRefresh } from "@/hooks/use-coalesced-refresh";
 import { PrintReceipt } from "@/components/print-receipt";
 import { PrintTicket } from "@/components/print-ticket";
 import { ServiceControl } from "@/components/service-control";
 import { buildCashierTableRows } from "@/lib/cashier-tables";
 import { formatCurrency, formatDateTime, formatTime } from "@/lib/format";
 import { getOrderLocationLabel, getOrderShortLabel } from "@/lib/order-display";
+import { reportOperationalError } from "@/lib/operational-client-log";
 import {
   aggregateIdenticalOrderItems,
 } from "@/lib/order-items";
@@ -19,6 +21,10 @@ import {
   getStaffPrintMessage,
 } from "@/lib/print-job-state";
 import { readFailureState } from "@/lib/reliable-data-state";
+import {
+  isRealtimeFailureStatus,
+  isRealtimeSubscribedStatus,
+} from "@/lib/realtime-status";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentService } from "@/hooks/use-current-service";
 import type {
@@ -130,6 +136,7 @@ export function CashierDashboard() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const loadGeneration = useRef(0);
   const hasSnapshot = useRef(false);
+  const cancelPrintJobInFlight = useRef(false);
   const canWrite =
     connectionCanWrite && dataState === "ready" && serviceState === "ready";
 
@@ -230,6 +237,7 @@ export function CashierDashboard() {
     setDataState("ready");
     setLoading(false);
   }, [markUnreliable, service?.id]);
+  const scheduleLoad = useCoalescedRefresh(load);
 
   const refreshPrinter = useCallback(async () => {
     try {
@@ -259,21 +267,34 @@ export function CashierDashboard() {
     });
 
     const supabase = createClient();
+    let subscribed = false;
     const channel = supabase
       .channel("cashier-dashboard")
-      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, load)
-      .on("postgres_changes", { event: "*", schema: "public", table: "order_items" }, load)
-      .on("postgres_changes", { event: "*", schema: "public", table: "print_jobs" }, load)
-      .subscribe();
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, scheduleLoad)
+      .on("postgres_changes", { event: "*", schema: "public", table: "order_items" }, scheduleLoad)
+      .on("postgres_changes", { event: "*", schema: "public", table: "print_jobs" }, scheduleLoad)
+      .subscribe((channelStatus: string) => {
+        if (isRealtimeFailureStatus(channelStatus)) {
+          markUnreliable();
+          setLoadError("Aggiornamenti in tempo reale interrotti. Riconnessione in corso.");
+          setDataState(readFailureState(hasSnapshot.current));
+          return;
+        }
+        if (isRealtimeSubscribedStatus(channelStatus)) {
+          if (subscribed) scheduleLoad();
+          subscribed = true;
+        }
+      });
     const interval = window.setInterval(() => {
-      void refreshPrinter().then(load);
+      void refreshPrinter();
+      scheduleLoad();
     }, 15_000);
 
     return () => {
       window.clearInterval(interval);
       void supabase.removeChannel(channel);
     };
-  }, [load, refreshPrinter]);
+  }, [load, markUnreliable, refreshPrinter, scheduleLoad]);
 
   const orderById = useMemo(
     () => new Map(orders.map((order) => [order.id, order])),
@@ -1474,24 +1495,63 @@ export function CashierDashboard() {
   }
 
   async function cancelQueuedPrintJob(job: PrintJob) {
-    if (!canWrite || !canSafelyCancelPrintJob(job)) return;
-    setBusyJobId(job.id);
-    const { error } = await createClient().rpc("cancel_print_job", {
-      p_job_id: job.id,
-      p_note: "Job annullato dalla cassa prima dell’invio",
-    });
-    setBusyJobId(null);
-    if (error) {
-      if (!error.code) markUnreliable();
-      setMessage(error.message);
+    if (
+      !canWrite ||
+      !canSafelyCancelPrintJob(job) ||
+      cancelPrintJobInFlight.current
+    ) {
       return;
     }
-    setMessage(
-      job.job_type === "new_order"
-        ? "Comanda annullata. Il tavolo non bloccherà la chiusura del servizio."
-        : "Job annullato senza inviare alcuna stampa.",
-    );
-    await load();
+    cancelPrintJobInFlight.current = true;
+    setBusyJobId(job.id);
+    try {
+      const { error } = await createClient().rpc("cancel_print_job", {
+        p_job_id: job.id,
+        p_note: "Job annullato dalla cassa prima dell’invio",
+      });
+      if (error) {
+        reportOperationalError({
+          event: "print_job_cancel_failed",
+          error,
+          orderId: job.order_id,
+          printJobId: job.id,
+        });
+        if (!error.code) markUnreliable();
+        setMessage(
+          error.code
+            ? `${error.message} Elenco aggiornato: verifica lo stato reale prima di riprovare.`
+            : "Connessione non affidabile. Verifica lo stato prima di ripetere l’annullamento.",
+        );
+      } else {
+        setMessage(
+          job.job_type === "new_order"
+            ? "Comanda annullata. Il tavolo non bloccherà la chiusura del servizio."
+            : "Job annullato senza inviare alcuna stampa.",
+        );
+      }
+    } catch (error) {
+      reportOperationalError({
+        event: "print_job_cancel_failed",
+        error,
+        orderId: job.order_id,
+        printJobId: job.id,
+      });
+      markUnreliable();
+      setMessage(
+        "Connessione non affidabile. Verifica lo stato prima di ripetere l’annullamento.",
+      );
+    } finally {
+      // Keep every cancellation control disabled until the authoritative job
+      // state has been fetched again. This prevents repeated calls against a
+      // stale card after the database safely rejects an outdated action.
+      try {
+        await load();
+      } catch {
+        markUnreliable();
+      }
+      cancelPrintJobInFlight.current = false;
+      setBusyJobId(null);
+    }
   }
 }
 
