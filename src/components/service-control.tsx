@@ -6,6 +6,10 @@ import {
   formatServiceLabel,
   isPreviousService,
 } from "@/lib/service-management";
+import {
+  isRealtimeFailureStatus,
+  isRealtimeSubscribedStatus,
+} from "@/lib/realtime-status";
 import { createClient } from "@/lib/supabase/client";
 import type { RestaurantService, ServicePeriod } from "@/types/domain";
 
@@ -50,6 +54,7 @@ export function ServiceControl({
 
   useEffect(() => {
     let active = true;
+    let subscribed = false;
     const supabase = createClient();
     const loadSetting = async () => {
       const { data } = await supabase
@@ -66,12 +71,21 @@ export function ServiceControl({
         { event: "UPDATE", schema: "public", table: "restaurant_settings" },
         () => void loadSetting(),
       )
-      .subscribe();
+      .subscribe((channelStatus: string) => {
+        if (isRealtimeFailureStatus(channelStatus)) {
+          markUnreliable();
+          return;
+        }
+        if (isRealtimeSubscribedStatus(channelStatus)) {
+          if (subscribed) void loadSetting();
+          subscribed = true;
+        }
+      });
     return () => {
       active = false;
       void supabase.removeChannel(channel);
     };
-  }, []);
+  }, [markUnreliable]);
 
   useEffect(() => {
     if (service) return;

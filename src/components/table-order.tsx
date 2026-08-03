@@ -4,8 +4,11 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { useConnection } from "@/components/connection-provider";
+import { useCoalescedRefresh } from "@/hooks/use-coalesced-refresh";
 import { QUICK_NOTES, ORDER_STATUS_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/format";
+import { reportOperationalError } from "@/lib/operational-client-log";
+import type { OperationalEvent } from "@/lib/operational-events";
 import {
   aggregateMenuItemQuantities,
   getOrderSubmissionIssue,
@@ -16,8 +19,16 @@ import {
   canSendOrderUpdate,
 } from "@/lib/order-workflow";
 import { getOrderShortLabel } from "@/lib/order-display";
-import { aggregateIdenticalOrderItems } from "@/lib/order-items";
+import {
+  aggregateIdenticalOrderItems,
+  applyPendingQuantityDeltas,
+  buildQuantityChangeOperations,
+} from "@/lib/order-items";
 import { formatServiceLabel, isPreviousService } from "@/lib/service-management";
+import {
+  isRealtimeFailureStatus,
+  isRealtimeSubscribedStatus,
+} from "@/lib/realtime-status";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentService } from "@/hooks/use-current-service";
 import type {
@@ -34,6 +45,9 @@ import type {
 } from "@/types/domain";
 
 type MutationTask = () => Promise<void>;
+type QuantityPhase = "idle" | "collecting" | "flushing";
+
+const QUANTITY_BATCH_DELAY_MS = 250;
 
 export function TableOrder({
   tableId,
@@ -66,6 +80,10 @@ export function TableOrder({
   const [activeCategory, setActiveCategory] = useState("");
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState<"saved" | "saving" | "error">("saved");
+  const [quantityPhase, setQuantityPhase] = useState<QuantityPhase>("idle");
+  const [pendingQuantityDeltas, setPendingQuantityDeltas] = useState<
+    Record<string, number>
+  >({});
   const [submitting, setSubmitting] = useState(false);
   const [mutationError, setMutationError] = useState("");
   const [presence, setPresence] = useState<string[]>([]);
@@ -73,6 +91,11 @@ export function TableOrder({
   const [updatePrintStatus, setUpdatePrintStatus] = useState<PrintStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const selfUpdate = useRef(false);
+  const mutationInFlight = useRef(false);
+  const quantityPhaseRef = useRef<QuantityPhase>("idle");
+  const pendingQuantityDeltasRef = useRef<Record<string, number>>({});
+  const quantityFlushTimer = useRef<number | null>(null);
+  const itemsRef = useRef<OrderItem[]>([]);
   const submittingRef = useRef(false);
   const initialLoadStarted = useRef(false);
   const baseLoaded = useRef(false);
@@ -86,6 +109,10 @@ export function TableOrder({
   const [loadError, setLoadError] = useState("");
   const canWrite =
     connectionCanWrite && dataState === "ready" && serviceState === "ready";
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   const loadOrder = useCallback(
     async (create = false) => {
@@ -186,7 +213,7 @@ export function TableOrder({
       setUpdatePrintStatus(
         (updateJobResult.data?.status as PrintStatus | undefined) ?? null,
       );
-      setSaving("saved");
+      if (quantityPhaseRef.current === "idle") setSaving("saved");
       loadedSuccessfully.current = true;
       setLoadError("");
       setDataState("ready");
@@ -194,6 +221,7 @@ export function TableOrder({
     },
     [markUnreliable, requestedOrderId, tableId, takeawayMode],
   );
+  const scheduleOrderRefresh = useCoalescedRefresh(loadOrder);
 
   const loadBase = useCallback(async (createOrder: boolean) => {
     const generation = ++baseLoadGeneration.current;
@@ -242,7 +270,11 @@ export function TableOrder({
   }, [loadOrder, markUnreliable, tableId]);
 
   const mutate = useCallback(
-    async (task: MutationTask) => {
+    async (
+      event: OperationalEvent,
+      task: MutationTask,
+      allowQuantityBatch = false,
+    ) => {
       const serviceAvailable = Boolean(service && !isPreviousService(service));
       if (!canWrite || !serviceAvailable) {
         setSaving("error");
@@ -251,28 +283,122 @@ export function TableOrder({
             ? blockReason ?? "Connessione non verificata. Operazione non eseguita."
             : "Il servizio non è aperto o appartiene a un giorno precedente.",
         );
-        return;
+        return false;
       }
+      if (
+        mutationInFlight.current ||
+        submittingRef.current ||
+        (!allowQuantityBatch && quantityPhaseRef.current !== "idle")
+      ) {
+        setMutationError("Salvataggio già in corso. Attendi un momento e ripeti il comando.");
+        return false;
+      }
+
+      mutationInFlight.current = true;
       setSaving("saving");
       setMutationError("");
       selfUpdate.current = true;
       try {
         await task();
         await loadOrder();
+        return true;
       } catch (error) {
+        reportOperationalError({ event, error, orderId: order?.id });
+        const connectionFailure = isConnectionFailure(error);
+        if (connectionFailure) {
+          markUnreliable();
+        } else {
+          // Domain errors such as optimistic-lock conflicts mean the local
+          // order snapshot may be stale. Refresh it before allowing another
+          // edit; never retry the mutation automatically.
+          await loadOrder();
+        }
         setSaving("error");
-        if (isConnectionFailure(error)) markUnreliable();
         setMutationError(
-          getErrorMessage(error),
+          connectionFailure
+            ? getErrorMessage(error)
+            : `${getErrorMessage(error)} La comanda è stata ricaricata: verifica i dati prima di ripetere.`,
         );
+        return false;
       } finally {
+        mutationInFlight.current = false;
         window.setTimeout(() => {
           selfUpdate.current = false;
         }, 500);
       }
     },
-    [blockReason, canWrite, loadOrder, markUnreliable, service],
+    [blockReason, canWrite, loadOrder, markUnreliable, order?.id, service],
   );
+
+  const flushQuantityChanges = useCallback(async () => {
+    if (quantityFlushTimer.current !== null) {
+      window.clearTimeout(quantityFlushTimer.current);
+      quantityFlushTimer.current = null;
+    }
+
+    const changes = Object.entries(pendingQuantityDeltasRef.current)
+      .filter(([, delta]) => delta !== 0);
+    if (changes.length === 0) {
+      quantityPhaseRef.current = "idle";
+      setQuantityPhase("idle");
+      setSaving("saved");
+      return;
+    }
+
+    quantityPhaseRef.current = "flushing";
+    setQuantityPhase("flushing");
+    const succeeded = await mutate(
+      "order_item_quantity_change_failed",
+      async () => {
+        const operations = changes.flatMap(([itemId, delta]) =>
+          buildQuantityChangeOperations(itemsRef.current, itemId, delta),
+        );
+        if (operations.length === 0) {
+          throw new Error("La riga non è più disponibile.");
+        }
+
+        const results = await Promise.all(
+          operations.map(({ itemId, delta }) =>
+            createClient().rpc("change_order_item_quantity", {
+              p_item_id: itemId,
+              p_delta: delta,
+            }),
+          ),
+        );
+        const firstError = results.find((result) => result.error)?.error;
+        if (firstError) throw firstError;
+      },
+      true,
+    );
+
+    pendingQuantityDeltasRef.current = {};
+    setPendingQuantityDeltas({});
+    quantityPhaseRef.current = "idle";
+    setQuantityPhase("idle");
+    if (succeeded) setSaving("saved");
+  }, [mutate]);
+
+  useEffect(() => {
+    const flushWhenHidden = () => {
+      if (
+        document.visibilityState === "hidden" &&
+        quantityPhaseRef.current === "collecting"
+      ) {
+        void flushQuantityChanges();
+      }
+    };
+    document.addEventListener("visibilitychange", flushWhenHidden);
+
+    return () => {
+      document.removeEventListener("visibilitychange", flushWhenHidden);
+      if (quantityPhaseRef.current === "collecting") {
+        void flushQuantityChanges();
+      } else if (quantityFlushTimer.current !== null) {
+        window.clearTimeout(quantityFlushTimer.current);
+        quantityFlushTimer.current = null;
+      }
+    };
+  }, [flushQuantityChanges]);
 
   useEffect(() => {
     if (
@@ -321,6 +447,7 @@ export function TableOrder({
   useEffect(() => {
     if (!orderId) return;
     const supabase = createClient();
+    let subscribed = false;
     const changes = supabase
       .channel(`order:${orderId}`)
       .on(
@@ -337,7 +464,7 @@ export function TableOrder({
           ) {
             setExternalUpdate(true);
           }
-          void loadOrder();
+          scheduleOrderRefresh();
         },
       )
       .on(
@@ -354,15 +481,27 @@ export function TableOrder({
           ) {
             setExternalUpdate(true);
           }
-          void loadOrder();
+          scheduleOrderRefresh();
         },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "print_jobs", filter: `order_id=eq.${orderId}` },
-        () => void loadOrder(),
+        scheduleOrderRefresh,
       )
-      .subscribe();
+      .subscribe((channelStatus: string) => {
+        if (isRealtimeFailureStatus(channelStatus)) {
+          markUnreliable();
+          setSaving("error");
+          setLoadError("Aggiornamenti della comanda interrotti. Riconnessione in corso.");
+          setDataState(loadedSuccessfully.current ? "stale" : "error");
+          return;
+        }
+        if (isRealtimeSubscribedStatus(channelStatus)) {
+          if (subscribed) scheduleOrderRefresh();
+          subscribed = true;
+        }
+      });
 
     const room = supabase.channel(
       tableId ? `table:${tableId}` : `table:takeaway:${orderId}`,
@@ -390,7 +529,7 @@ export function TableOrder({
       void supabase.removeChannel(changes);
       void supabase.removeChannel(room);
     };
-  }, [loadOrder, orderId, profile.full_name, profile.id, tableId]);
+  }, [markUnreliable, orderId, profile.full_name, profile.id, scheduleOrderRefresh, tableId]);
 
   const visibleProducts = useMemo(() => {
     const needle = search.toLowerCase().trim();
@@ -408,13 +547,13 @@ export function TableOrder({
       return matchesCategory && matchesSearch;
     });
   }, [activeCategory, categories, menuItems, search, takeawayMode]);
-  const menuItemQuantities = useMemo(
-    () => aggregateMenuItemQuantities(items),
-    [items],
-  );
   const displayedItems = useMemo(
-    () => aggregateIdenticalOrderItems(items),
-    [items],
+    () => applyPendingQuantityDeltas(items, pendingQuantityDeltas),
+    [items, pendingQuantityDeltas],
+  );
+  const menuItemQuantities = useMemo(
+    () => aggregateMenuItemQuantities(displayedItems),
+    [displayedItems],
   );
 
   if (serviceState === "error") {
@@ -479,7 +618,18 @@ export function TableOrder({
         ? "Il servizio precedente deve essere chiuso dalla cassa."
         : null;
   const editable = canEditOrder(order.status);
-  const writeEnabled = editable && operationsEnabled;
+  const writeEnabled =
+    editable &&
+    operationsEnabled &&
+    saving !== "saving" &&
+    !submitting &&
+    quantityPhase === "idle";
+  const quantityWriteEnabled =
+    editable &&
+    operationsEnabled &&
+    !submitting &&
+    quantityPhase !== "flushing" &&
+    (saving !== "saving" || quantityPhase === "collecting");
   const canVerifySubmission =
     profile.role === "waiter" &&
     order.status === "pending_cashier" &&
@@ -610,7 +760,7 @@ export function TableOrder({
                 title={!operationsEnabled ? operationalBlockReason ?? undefined : undefined}
                 key={item.id}
                 onClick={() =>
-                  void mutate(async () => {
+                  void mutate("order_item_add_failed", async () => {
                     const { error } = await createClient().rpc("add_order_item", {
                       p_order_id: order.id,
                       p_menu_item_id: item.id,
@@ -639,11 +789,11 @@ export function TableOrder({
         <section className="order-panel">
           <div className="panel-title">
             <div><p className="eyebrow">Ordine</p><h2>Comanda</h2></div>
-            <strong>{items.reduce((sum, item) => sum + item.quantity, 0)} prodotti</strong>
+            <strong>{displayedItems.reduce((sum, item) => sum + item.quantity, 0)} prodotti</strong>
           </div>
 
           <div className="order-lines">
-            {items.length === 0 && <p className="empty-line">Tocca un prodotto per iniziare.</p>}
+            {displayedItems.length === 0 && <p className="empty-line">Tocca un prodotto per iniziare.</p>}
             {displayedItems.map((item) => (
               <article className="order-line" key={item.id}>
                 <div className="line-main">
@@ -652,9 +802,9 @@ export function TableOrder({
                 </div>
                 <div className="line-actions">
                   <div className="stepper small">
-                    <button disabled={!writeEnabled} onClick={() => void quantity(item.id, -1)}>−</button>
+                    <button disabled={!quantityWriteEnabled} onClick={() => queueQuantity(item, -1)}>−</button>
                     <strong>{item.quantity}</strong>
-                    <button disabled={!writeEnabled} onClick={() => void quantity(item.id, 1)}>+</button>
+                    <button disabled={!quantityWriteEnabled} onClick={() => queueQuantity(item, 1)}>+</button>
                   </div>
                   <button className="danger-link" disabled={!writeEnabled} onClick={() => void remove(item.id)}>Rimuovi</button>
                 </div>
@@ -696,7 +846,7 @@ export function TableOrder({
                   <select
                     className="extra-select"
                     defaultValue=""
-                    disabled={!operationsEnabled}
+                    disabled={!writeEnabled}
                     onChange={(event) => {
                       const extraId = event.target.value;
                       event.target.value = "";
@@ -750,6 +900,7 @@ export function TableOrder({
           aria-describedby={submissionIssue ? "order-send-hint" : undefined}
           disabled={
             submitting ||
+            saving === "saving" ||
             !operationsEnabled ||
             (order.status === "draft" ? submissionIssue !== null : !submissionType)
           }
@@ -774,7 +925,7 @@ export function TableOrder({
       setMutationError("La nota ordine non può superare 500 caratteri.");
       return;
     }
-    await mutate(async () => {
+    await mutate("order_details_update_failed", async () => {
       const { error } = await createClient().rpc("set_order_details", {
         p_order_id: order!.id,
         p_cover_count: covers,
@@ -785,18 +936,52 @@ export function TableOrder({
     });
   }
 
-  async function quantity(itemId: string, delta: number) {
-    await mutate(async () => {
-      const { error } = await createClient().rpc("change_order_item_quantity", {
-        p_item_id: itemId,
-        p_delta: delta,
-      });
-      if (error) throw error;
-    });
+  function queueQuantity(item: OrderItem, delta: number) {
+    if (
+      !operationsEnabled ||
+      !editable ||
+      submittingRef.current ||
+      mutationInFlight.current ||
+      quantityPhaseRef.current === "flushing"
+    ) {
+      setMutationError("Salvataggio già in corso. Attendi un momento e ripeti il comando.");
+      return;
+    }
+    const nextPending = { ...pendingQuantityDeltasRef.current };
+    const nextDelta = (nextPending[item.id] ?? 0) + delta;
+    const baseQuantity =
+      aggregateIdenticalOrderItems(itemsRef.current)
+        .find((currentItem) => currentItem.id === item.id)?.quantity ?? 0;
+    if (baseQuantity + nextDelta < 0) return;
+
+    if (nextDelta === 0) delete nextPending[item.id];
+    else nextPending[item.id] = nextDelta;
+    pendingQuantityDeltasRef.current = nextPending;
+    setPendingQuantityDeltas(nextPending);
+    setMutationError("");
+
+    if (quantityFlushTimer.current !== null) {
+      window.clearTimeout(quantityFlushTimer.current);
+      quantityFlushTimer.current = null;
+    }
+    if (Object.keys(nextPending).length === 0) {
+      quantityPhaseRef.current = "idle";
+      setQuantityPhase("idle");
+      setSaving("saved");
+      return;
+    }
+
+    quantityPhaseRef.current = "collecting";
+    setQuantityPhase("collecting");
+    setSaving("saving");
+    quantityFlushTimer.current = window.setTimeout(() => {
+      quantityFlushTimer.current = null;
+      void flushQuantityChanges();
+    }, QUANTITY_BATCH_DELAY_MS);
   }
 
   async function remove(itemId: string) {
-    await mutate(async () => {
+    await mutate("order_item_remove_failed", async () => {
       const { error } = await createClient().rpc("remove_order_item", { p_item_id: itemId });
       if (error) throw error;
     });
@@ -807,7 +992,7 @@ export function TableOrder({
       setMutationError("La nota riga non può superare 300 caratteri.");
       return;
     }
-    await mutate(async () => {
+    await mutate("order_item_note_update_failed", async () => {
       const { error } = await createClient().rpc("set_order_item_notes", {
         p_item_id: item.id,
         p_notes: notes,
@@ -818,7 +1003,7 @@ export function TableOrder({
   }
 
   async function addExtra(itemId: string, extraId: string) {
-    await mutate(async () => {
+    await mutate("order_item_extra_add_failed", async () => {
       const { error } = await createClient().rpc("add_order_item_extra", {
         p_item_id: itemId,
         p_menu_extra_id: extraId,
@@ -828,7 +1013,7 @@ export function TableOrder({
   }
 
   async function removeExtra(extraId: string) {
-    await mutate(async () => {
+    await mutate("order_item_extra_remove_failed", async () => {
       const { error } = await createClient().rpc("remove_order_item_extra", {
         p_extra_id: extraId,
       });
@@ -840,6 +1025,13 @@ export function TableOrder({
     type: Extract<PrintJobType, "new_order" | "order_update">,
   ) {
     if (submittingRef.current) return;
+    if (
+      mutationInFlight.current ||
+      quantityPhaseRef.current !== "idle"
+    ) {
+      setMutationError("Attendi il salvataggio in corso prima di inviare la comanda.");
+      return;
+    }
     if (!operationsEnabled) {
       setSaving("error");
       setMutationError(
@@ -867,6 +1059,14 @@ export function TableOrder({
       };
 
       if (!response.ok && !payload.orderAccepted) {
+        reportOperationalError({
+          event: "order_submit_failed",
+          error: {
+            code: `HTTP_${response.status}`,
+            message: payload.error ?? "Invio comanda non riuscito",
+          },
+          orderId: order!.id,
+        });
         setSaving("error");
         setMutationError(
           payload.error ??
@@ -889,7 +1089,12 @@ export function TableOrder({
             : `${acceptedLabel}, ma la stampa è fallita: ${payload.error ?? "interviene la cassa"}.`,
         );
       }
-    } catch {
+    } catch (error) {
+      reportOperationalError({
+        event: "order_submit_failed",
+        error,
+        orderId: order!.id,
+      });
       setSaving("error");
       markUnreliable();
       setMutationError(

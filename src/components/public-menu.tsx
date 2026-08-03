@@ -2,9 +2,14 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCoalescedRefresh } from "@/hooks/use-coalesced-refresh";
 import { createClient } from "@/lib/supabase/client";
 import { DEFAULT_SETTINGS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/format";
+import {
+  isRealtimeFailureStatus,
+  isRealtimeSubscribedStatus,
+} from "@/lib/realtime-status";
 import type { MenuCategory, MenuData, MenuExtra, MenuItem, RestaurantSettings } from "@/types/domain";
 
 const EMPTY_MENU: MenuData = {
@@ -68,23 +73,34 @@ export function PublicMenu() {
     setError(false);
     setLoading(false);
   }, []);
+  const scheduleLoad = useCoalescedRefresh(load);
 
   useEffect(() => {
     queueMicrotask(() => void load());
     const supabase = createClient();
+    let subscribed = false;
     const channel = supabase
       .channel("public-menu")
-      .on("postgres_changes", { event: "*", schema: "public", table: "menu_categories" }, load)
-      .on("postgres_changes", { event: "*", schema: "public", table: "menu_items" }, load)
-      .on("postgres_changes", { event: "*", schema: "public", table: "menu_extras" }, load)
-      .on("postgres_changes", { event: "*", schema: "public", table: "restaurant_settings" }, load)
-      .subscribe();
+      .on("postgres_changes", { event: "*", schema: "public", table: "menu_categories" }, scheduleLoad)
+      .on("postgres_changes", { event: "*", schema: "public", table: "menu_items" }, scheduleLoad)
+      .on("postgres_changes", { event: "*", schema: "public", table: "menu_extras" }, scheduleLoad)
+      .on("postgres_changes", { event: "*", schema: "public", table: "restaurant_settings" }, scheduleLoad)
+      .subscribe((channelStatus: string) => {
+        if (isRealtimeFailureStatus(channelStatus)) {
+          setError(true);
+          return;
+        }
+        if (isRealtimeSubscribedStatus(channelStatus)) {
+          if (subscribed) scheduleLoad();
+          subscribed = true;
+        }
+      });
 
     return () => {
       loadGeneration.current += 1;
       void supabase.removeChannel(channel);
     };
-  }, [load]);
+  }, [load, scheduleLoad]);
 
   useEffect(() => {
     document.documentElement.lang = language;

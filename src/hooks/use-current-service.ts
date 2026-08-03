@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useConnection } from "@/components/connection-provider";
+import { useCoalescedRefresh } from "@/hooks/use-coalesced-refresh";
 import { readFailureState, type ReliableDataState } from "@/lib/reliable-data-state";
+import {
+  isRealtimeFailureStatus,
+  isRealtimeSubscribedStatus,
+} from "@/lib/realtime-status";
 import { createClient } from "@/lib/supabase/client";
 import type { RestaurantService } from "@/types/domain";
 
@@ -39,23 +44,36 @@ export function useCurrentService() {
     setState("ready");
     setLoading(false);
   }, [markUnreliable]);
+  const scheduleLoad = useCoalescedRefresh(load);
 
   useEffect(() => {
     queueMicrotask(() => void load());
     const supabase = createClient();
+    let subscribed = false;
     const channel = supabase
       .channel("current-restaurant-service")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "restaurant_services" },
-        load,
+        scheduleLoad,
       )
-      .subscribe();
+      .subscribe((channelStatus: string) => {
+        if (isRealtimeFailureStatus(channelStatus)) {
+          markUnreliable();
+          setError("Aggiornamenti in tempo reale interrotti. Riconnessione in corso.");
+          setState(readFailureState(hasSnapshot.current));
+          return;
+        }
+        if (isRealtimeSubscribedStatus(channelStatus)) {
+          if (subscribed) scheduleLoad();
+          subscribed = true;
+        }
+      });
 
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [load]);
+  }, [load, markUnreliable, scheduleLoad]);
 
   return { service, loading, error, state, reload: load };
 }

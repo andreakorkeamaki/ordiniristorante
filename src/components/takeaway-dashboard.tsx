@@ -4,11 +4,16 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useConnection } from "@/components/connection-provider";
+import { useCoalescedRefresh } from "@/hooks/use-coalesced-refresh";
 import { useCurrentService } from "@/hooks/use-current-service";
 import { ACTIVE_ORDER_STATUSES, ORDER_STATUS_LABELS } from "@/lib/constants";
 import { formatDateTime, formatTime } from "@/lib/format";
 import { groupOrderItemsByPreparationArea } from "@/lib/order-items";
 import { readFailureState } from "@/lib/reliable-data-state";
+import {
+  isRealtimeFailureStatus,
+  isRealtimeSubscribedStatus,
+} from "@/lib/realtime-status";
 import { getPrintJobStatusLabel } from "@/lib/print-job-state";
 import {
   formatServiceLabel,
@@ -105,37 +110,50 @@ export function TakeawayDashboard() {
     setDataState("ready");
     setLoading(false);
   }, [markUnreliable, service, serviceError, serviceLoading, serviceState]);
+  const scheduleLoad = useCoalescedRefresh(load);
 
   useEffect(() => {
     queueMicrotask(() => void load());
     const supabase = createClient();
+    let subscribed = false;
     const channel = supabase
       .channel("takeaway-dashboard")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "orders" },
-        load,
+        scheduleLoad,
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "order_items" },
-        load,
+        scheduleLoad,
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "order_item_extras" },
-        load,
+        scheduleLoad,
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "print_jobs" },
-        load,
+        scheduleLoad,
       )
-      .subscribe();
+      .subscribe((channelStatus: string) => {
+        if (isRealtimeFailureStatus(channelStatus)) {
+          markUnreliable();
+          setLoadError("Aggiornamenti asporti interrotti. Riconnessione in corso.");
+          setDataState(readFailureState(hasSnapshot.current));
+          return;
+        }
+        if (isRealtimeSubscribedStatus(channelStatus)) {
+          if (subscribed) scheduleLoad();
+          subscribed = true;
+        }
+      });
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [load]);
+  }, [load, markUnreliable, scheduleLoad]);
 
   const takeaways = orders
     .filter((order) =>
