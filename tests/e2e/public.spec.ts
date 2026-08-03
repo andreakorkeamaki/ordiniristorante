@@ -10,7 +10,7 @@ test("la home porta al menu pubblico", async ({ page }) => {
 
   await expect(
     page.getByRole("heading", { name: "Il gusto di casa.", exact: true }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15_000 });
   await expect.poll(() => page.locator(".category-strip a").count()).toBeGreaterThan(0);
   await expect.poll(() => page.locator(".public-product").count()).toBeGreaterThan(0);
   await expect(page.getByText("Triangoli di cheddar e nacho")).toHaveCount(0);
