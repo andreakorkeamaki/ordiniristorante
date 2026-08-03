@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateIdenticalOrderItems,
+  applyPendingQuantityDeltas,
+  buildQuantityChangeOperations,
   groupOrderItemsByPreparationArea,
 } from "@/lib/order-items";
 import type { OrderItem } from "@/types/domain";
@@ -79,6 +81,63 @@ describe("aggregateIdenticalOrderItems", () => {
       quantity: 2,
       total: 2,
     });
+  });
+});
+
+describe("buildQuantityChangeOperations", () => {
+  it("accorpa più incrementi sulla stessa riga", () => {
+    expect(
+      buildQuantityChangeOperations([item({ id: "item-1" })], "item-1", 3),
+    ).toEqual([{ itemId: "item-1", delta: 3 }]);
+  });
+
+  it("distribuisce i decrementi tra righe identiche", () => {
+    expect(
+      buildQuantityChangeOperations(
+        [
+          item({ id: "item-1" }),
+          item({ id: "item-2" }),
+          item({ id: "item-3", quantity: 2 }),
+        ],
+        "item-1",
+        -3,
+      ),
+    ).toEqual([
+      { itemId: "item-1", delta: -1 },
+      { itemId: "item-2", delta: -1 },
+      { itemId: "item-3", delta: -1 },
+    ]);
+  });
+
+  it("non modifica righe con note diverse", () => {
+    expect(
+      buildQuantityChangeOperations(
+        [
+          item({ id: "item-1" }),
+          item({ id: "item-2", notes: "Senza glutine" }),
+        ],
+        "item-1",
+        -2,
+      ),
+    ).toEqual([{ itemId: "item-1", delta: -1 }]);
+  });
+});
+
+describe("applyPendingQuantityDeltas", () => {
+  it("mostra subito il totale dei tocchi ancora da salvare", () => {
+    const result = applyPendingQuantityDeltas(
+      [item({ id: "item-1" }), item({ id: "item-2", quantity: 2 })],
+      { "item-1": 2 },
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ quantity: 5, line_total: 84.5 });
+  });
+
+  it("nasconde subito una riga portata a zero", () => {
+    expect(
+      applyPendingQuantityDeltas([item({ id: "item-1" })], { "item-1": -1 }),
+    ).toEqual([]);
   });
 });
 

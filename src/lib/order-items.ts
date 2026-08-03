@@ -60,6 +60,42 @@ function itemSignature(item: OrderItem) {
   ].join("\u0002");
 }
 
+export interface QuantityChangeOperation {
+  itemId: string;
+  delta: number;
+}
+
+export function buildQuantityChangeOperations(
+  items: OrderItem[],
+  targetItemId: string,
+  delta: number,
+): QuantityChangeOperation[] {
+  if (delta === 0) return [];
+
+  const target = items.find((item) => item.id === targetItemId);
+  if (!target) return [];
+  if (delta > 0) return [{ itemId: target.id, delta }];
+
+  const signature = itemSignature(target);
+  const identicalItems = [
+    target,
+    ...items.filter(
+      (item) => item.id !== target.id && itemSignature(item) === signature,
+    ),
+  ];
+  let remaining = -delta;
+  const operations: QuantityChangeOperation[] = [];
+
+  for (const item of identicalItems) {
+    if (remaining === 0) break;
+    const decrease = Math.min(item.quantity, remaining);
+    operations.push({ itemId: item.id, delta: -decrease });
+    remaining -= decrease;
+  }
+
+  return operations;
+}
+
 function normalizedPreparationExtras(extras: OrderItemExtra[]) {
   const aggregated = new Map<string, OrderItemExtra>();
 
@@ -125,6 +161,26 @@ export function aggregateIdenticalOrderItems(items: OrderItem[]) {
   }
 
   return [...aggregated.values()];
+}
+
+export function applyPendingQuantityDeltas(
+  items: OrderItem[],
+  pendingDeltas: Readonly<Record<string, number>>,
+) {
+  return aggregateIdenticalOrderItems(items)
+    .map((item) => {
+      const delta = pendingDeltas[item.id] ?? 0;
+      if (delta === 0) return item;
+      return {
+        ...item,
+        quantity: Math.max(0, item.quantity + delta),
+        line_total: Math.max(
+          0,
+          item.line_total + item.item_price_snapshot * delta,
+        ),
+      };
+    })
+    .filter((item) => item.quantity > 0);
 }
 
 export function aggregatePreparationOrderItems(items: OrderItem[]) {

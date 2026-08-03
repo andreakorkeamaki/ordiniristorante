@@ -3,9 +3,14 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConnection } from "@/components/connection-provider";
+import { useCoalescedRefresh } from "@/hooks/use-coalesced-refresh";
 import { ACTIVE_ORDER_STATUSES, ORDER_STATUS_LABELS } from "@/lib/constants";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { readFailureState } from "@/lib/reliable-data-state";
+import {
+  isRealtimeFailureStatus,
+  isRealtimeSubscribedStatus,
+} from "@/lib/realtime-status";
 import {
   formatServiceLabel,
   isPreviousService,
@@ -109,20 +114,33 @@ export function StaffTables({ profile }: { profile: Profile }) {
     setDataState("ready");
     setLoading(false);
   }, [markUnreliable, service, serviceError, serviceLoading, serviceState]);
+  const scheduleLoad = useCoalescedRefresh(load);
 
   useEffect(() => {
     queueMicrotask(() => void load());
     const supabase = createClient();
+    let subscribed = false;
     const channel = supabase
       .channel("staff-tables")
-      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, load)
-      .on("postgres_changes", { event: "*", schema: "public", table: "restaurant_tables" }, load)
-      .on("postgres_changes", { event: "*", schema: "public", table: "restaurant_settings" }, load)
-      .subscribe();
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, scheduleLoad)
+      .on("postgres_changes", { event: "*", schema: "public", table: "restaurant_tables" }, scheduleLoad)
+      .on("postgres_changes", { event: "*", schema: "public", table: "restaurant_settings" }, scheduleLoad)
+      .subscribe((channelStatus: string) => {
+        if (isRealtimeFailureStatus(channelStatus)) {
+          markUnreliable();
+          setLoadError("Aggiornamenti tavoli interrotti. Riconnessione in corso.");
+          setDataState(readFailureState(hasSnapshot.current));
+          return;
+        }
+        if (isRealtimeSubscribedStatus(channelStatus)) {
+          if (subscribed) scheduleLoad();
+          subscribed = true;
+        }
+      });
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [load]);
+  }, [load, markUnreliable, scheduleLoad]);
 
   const orderByTable = useMemo(
     () => new Map(
