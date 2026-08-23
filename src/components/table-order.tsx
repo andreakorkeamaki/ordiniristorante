@@ -88,7 +88,7 @@ export function TableOrder({
   const [submitting, setSubmitting] = useState(false);
   const [mutationError, setMutationError] = useState("");
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
-  const [coverDraft, setCoverDraft] = useState(0);
+  const [coverDraft, setCoverDraft] = useState("");
   const [presence, setPresence] = useState<string[]>([]);
   const [externalUpdate, setExternalUpdate] = useState(false);
   const [updatePrintStatus, setUpdatePrintStatus] = useState<PrintStatus | null>(null);
@@ -769,7 +769,7 @@ export function TableOrder({
                     aria-expanded={coverPickerOpen}
                     disabled={!writeEnabled}
                     onClick={() => {
-                      setCoverDraft(order.cover_count);
+                      setCoverDraft(String(order.cover_count));
                       setCoverPickerOpen((open) => !open);
                     }}
                   >
@@ -788,31 +788,35 @@ export function TableOrder({
                 </div>
                 {coverPickerOpen && (
                   <div
-                    className="covers-slider-panel"
+                    className="covers-number-panel"
                     role="group"
-                    aria-label="Seleziona il numero di coperti"
+                    aria-label="Inserisci il numero di coperti"
                     onKeyDown={(event) => {
                       if (event.key === "Escape") setCoverPickerOpen(false);
                     }}
                   >
-                    <div className="covers-slider-heading">
-                      <span>Numero di coperti</span>
-                      <strong aria-live="polite">{coverDraft}</strong>
-                    </div>
+                    <label htmlFor="cover-count-input">Numero di coperti</label>
                     <input
+                      id="cover-count-input"
                       aria-label="Numero di coperti"
-                      type="range"
+                      type="number"
+                      inputMode="numeric"
                       min="0"
                       max={MAX_COVER_COUNT}
                       step="1"
                       value={coverDraft}
-                      onChange={(event) => setCoverDraft(Number(event.target.value))}
+                      autoFocus
+                      onFocus={(event) => event.currentTarget.select()}
+                      onChange={(event) => setCoverDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void confirmCoverSelection();
+                        }
+                      }}
                     />
-                    <div className="covers-slider-scale" aria-hidden="true">
-                      <span>0</span>
-                      <span>{MAX_COVER_COUNT}</span>
-                    </div>
-                    <div className="covers-slider-actions">
+                    <small>Inserisci un numero da 0 a {MAX_COVER_COUNT}.</small>
+                    <div className="covers-number-actions">
                       <button type="button" onClick={() => setCoverPickerOpen(false)}>
                         Annulla
                       </button>
@@ -1024,11 +1028,21 @@ export function TableOrder({
   );
 
   async function confirmCoverSelection() {
-    if (coverDraft === order!.cover_count) {
+    const nextCoverCount = Number(coverDraft);
+    if (
+      coverDraft.trim() === "" ||
+      !Number.isInteger(nextCoverCount) ||
+      nextCoverCount < 0 ||
+      nextCoverCount > MAX_COVER_COUNT
+    ) {
+      setMutationError(`Inserisci un numero di coperti da 0 a ${MAX_COVER_COUNT}.`);
+      return;
+    }
+    if (nextCoverCount === order!.cover_count) {
       setCoverPickerOpen(false);
       return;
     }
-    const saved = await saveDetails(coverDraft);
+    const saved = await saveDetails(nextCoverCount);
     if (saved) setCoverPickerOpen(false);
   }
 
