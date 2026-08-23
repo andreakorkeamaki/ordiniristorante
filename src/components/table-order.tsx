@@ -48,6 +48,7 @@ type MutationTask = () => Promise<void>;
 type QuantityPhase = "idle" | "collecting" | "flushing";
 
 const QUANTITY_BATCH_DELAY_MS = 250;
+const MAX_COVER_COUNT = 99;
 
 export function TableOrder({
   tableId,
@@ -86,6 +87,8 @@ export function TableOrder({
   >({});
   const [submitting, setSubmitting] = useState(false);
   const [mutationError, setMutationError] = useState("");
+  const [coverPickerOpen, setCoverPickerOpen] = useState(false);
+  const [coverDraft, setCoverDraft] = useState(0);
   const [presence, setPresence] = useState<string[]>([]);
   const [externalUpdate, setExternalUpdate] = useState(false);
   const [updatePrintStatus, setUpdatePrintStatus] = useState<PrintStatus | null>(null);
@@ -96,6 +99,7 @@ export function TableOrder({
   const pendingQuantityDeltasRef = useRef<Record<string, number>>({});
   const quantityFlushTimer = useRef<number | null>(null);
   const itemsRef = useRef<OrderItem[]>([]);
+  const orderPanelRef = useRef<HTMLElement>(null);
   const submittingRef = useRef(false);
   const initialLoadStarted = useRef(false);
   const baseLoaded = useRef(false);
@@ -555,6 +559,10 @@ export function TableOrder({
     () => aggregateMenuItemQuantities(displayedItems),
     [displayedItems],
   );
+  const displayedProductCount = displayedItems.reduce(
+    (sum, item) => sum + item.quantity,
+    0,
+  );
 
   if (serviceState === "error") {
     return (
@@ -725,10 +733,100 @@ export function TableOrder({
           {order.order_type === "dine_in" && (
             <div className="covers-row covers-row-menu">
               <span>Coperti</span>
-              <div className="stepper">
-                <button disabled={!writeEnabled || order.cover_count === 0} onClick={() => void saveDetails(order.cover_count - 1)}>−</button>
-                <strong>{order.cover_count}</strong>
-                <button disabled={!writeEnabled} onClick={() => void saveDetails(order.cover_count + 1)}>+</button>
+              <button
+                type="button"
+                className="view-order-button"
+                aria-label={`Vai alla comanda, ${displayedProductCount} prodotti`}
+                onClick={() => {
+                  setCoverPickerOpen(false);
+                  orderPanelRef.current?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "start",
+                  });
+                  orderPanelRef.current?.focus({ preventScroll: true });
+                }}
+              >
+                <span aria-hidden="true">↓</span>
+                <span className="view-order-label">Vedi ordine</span>
+                <strong>{displayedProductCount}</strong>
+              </button>
+              <div className="covers-control">
+                <div className="stepper">
+                  <button
+                    aria-label="Diminuisci coperti"
+                    disabled={!writeEnabled || order.cover_count === 0}
+                    onClick={() => {
+                      setCoverPickerOpen(false);
+                      void saveDetails(order.cover_count - 1);
+                    }}
+                  >
+                    −
+                  </button>
+                  <button
+                    type="button"
+                    className="covers-count-button"
+                    aria-label={`Scegli numero di coperti, attualmente ${order.cover_count}`}
+                    aria-expanded={coverPickerOpen}
+                    disabled={!writeEnabled}
+                    onClick={() => {
+                      setCoverDraft(order.cover_count);
+                      setCoverPickerOpen((open) => !open);
+                    }}
+                  >
+                    {order.cover_count}
+                  </button>
+                  <button
+                    aria-label="Aumenta coperti"
+                    disabled={!writeEnabled || order.cover_count === MAX_COVER_COUNT}
+                    onClick={() => {
+                      setCoverPickerOpen(false);
+                      void saveDetails(order.cover_count + 1);
+                    }}
+                  >
+                    +
+                  </button>
+                </div>
+                {coverPickerOpen && (
+                  <div
+                    className="covers-slider-panel"
+                    role="group"
+                    aria-label="Seleziona il numero di coperti"
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") setCoverPickerOpen(false);
+                    }}
+                  >
+                    <div className="covers-slider-heading">
+                      <span>Numero di coperti</span>
+                      <strong aria-live="polite">{coverDraft}</strong>
+                    </div>
+                    <input
+                      aria-label="Numero di coperti"
+                      type="range"
+                      min="0"
+                      max={MAX_COVER_COUNT}
+                      step="1"
+                      value={coverDraft}
+                      onChange={(event) => setCoverDraft(Number(event.target.value))}
+                    />
+                    <div className="covers-slider-scale" aria-hidden="true">
+                      <span>0</span>
+                      <span>{MAX_COVER_COUNT}</span>
+                    </div>
+                    <div className="covers-slider-actions">
+                      <button type="button" onClick={() => setCoverPickerOpen(false)}>
+                        Annulla
+                      </button>
+                      <button
+                        type="button"
+                        className="button-primary"
+                        disabled={!writeEnabled}
+                        onClick={() => void confirmCoverSelection()}
+                      >
+                        Conferma
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -786,10 +884,15 @@ export function TableOrder({
           </div>
         </section>
 
-        <section className="order-panel">
+        <section
+          className="order-panel"
+          id="table-order-summary"
+          ref={orderPanelRef}
+          tabIndex={-1}
+        >
           <div className="panel-title">
             <div><p className="eyebrow">Ordine</p><h2>Comanda</h2></div>
-            <strong>{displayedItems.reduce((sum, item) => sum + item.quantity, 0)} prodotti</strong>
+            <strong>{displayedProductCount} prodotti</strong>
           </div>
 
           <div className="order-lines">
@@ -920,12 +1023,21 @@ export function TableOrder({
     </>
   );
 
+  async function confirmCoverSelection() {
+    if (coverDraft === order!.cover_count) {
+      setCoverPickerOpen(false);
+      return;
+    }
+    const saved = await saveDetails(coverDraft);
+    if (saved) setCoverPickerOpen(false);
+  }
+
   async function saveDetails(covers: number, notes = order!.general_notes) {
     if (notes.length > 500) {
       setMutationError("La nota ordine non può superare 500 caratteri.");
-      return;
+      return false;
     }
-    await mutate("order_details_update_failed", async () => {
+    return mutate("order_details_update_failed", async () => {
       const { error } = await createClient().rpc("set_order_details", {
         p_order_id: order!.id,
         p_cover_count: covers,
