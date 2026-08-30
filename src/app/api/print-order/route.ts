@@ -5,6 +5,7 @@ import { getCurrentProfile } from "@/lib/auth";
 import { getInitialPrintDecision } from "@/lib/automatic-print-policy";
 import { getLatestStablePrintNodeState } from "@/lib/print-job-state";
 import { loadOrderForPrint } from "@/lib/load-order-for-print";
+import { loadOrderAdditionSnapshot } from "@/lib/order-update-ticket";
 import { canSendOrderUpdate } from "@/lib/order-workflow";
 import {
   cancelPrintNodeJobs,
@@ -325,12 +326,29 @@ export async function POST(request: Request) {
       );
     }
 
-    const ticketType = await resolveTicketType(supabase, job, input.type);
+    const ticketOrigin = await resolveTicketOrigin(supabase, job);
+    const ticketType =
+      ticketOrigin.job_type === "reprint" ? input.type : ticketOrigin.job_type;
+    let printableOrder = order;
+    if (ticketType === "order_update") {
+      const additionResult = await loadOrderAdditionSnapshot(
+        supabase,
+        order,
+        ticketOrigin,
+      );
+      if (!additionResult.ok) {
+        throw new PrintPreparationError(
+          "database_unreachable",
+          additionResult.technicalMessage,
+        );
+      }
+      printableOrder = additionResult.order;
+    }
     const printMode = await loadOrderTicketPrintMode(supabase);
     const content =
       printMode === "department_split"
-        ? buildRaw80mmDepartmentTicket(order, ticketType)
-        : buildRaw80mmTicket(order, ticketType);
+        ? buildRaw80mmDepartmentTicket(printableOrder, ticketType)
+        : buildRaw80mmTicket(printableOrder, ticketType);
     const printNodeCopies = printMode === "department_split" ? 1 : job.copies;
 
     if (input.type === "cancellation" && !job.retry_of_job_id) {
@@ -876,11 +894,10 @@ async function cancelEarlierPrintNodeJobs(supabase: SupabaseClient, orderId: str
   await cancelPrintNodeJobs(priorIds);
 }
 
-async function resolveTicketType(
+async function resolveTicketOrigin(
   supabase: SupabaseClient,
   job: PrintJob,
-  fallback: PrintJobType,
-): Promise<PrintJobType> {
+) {
   let current = job;
   const visited = new Set<string>();
   while (current.retry_of_job_id && !visited.has(current.retry_of_job_id)) {
@@ -889,7 +906,7 @@ async function resolveTicketType(
     if (!parent) break;
     current = parent;
   }
-  return current.job_type === "reprint" ? fallback : current.job_type;
+  return current;
 }
 
 async function loadPrintJob(supabase: SupabaseClient, jobId: string) {

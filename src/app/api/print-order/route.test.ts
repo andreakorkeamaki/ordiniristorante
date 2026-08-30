@@ -11,11 +11,17 @@ const mocks = vi.hoisted(() => ({
   cancelPrintNodeJobs: vi.fn(),
   createClient: vi.fn(),
   createAdminClient: vi.fn(),
+  loadOrderAdditionSnapshot: vi.fn(),
+  buildRaw80mmTicket: vi.fn(),
+  buildRaw80mmDepartmentTicket: vi.fn(),
 }));
 
 vi.mock("@/lib/auth", () => ({ getCurrentProfile: mocks.getCurrentProfile }));
 vi.mock("@/lib/load-order-for-print", () => ({
   loadOrderForPrint: mocks.loadOrderForPrint,
+}));
+vi.mock("@/lib/order-update-ticket", () => ({
+  loadOrderAdditionSnapshot: mocks.loadOrderAdditionSnapshot,
 }));
 vi.mock("@/lib/print-ticket-raw", () => ({
   PRINT_JOB_LABELS: {
@@ -25,8 +31,8 @@ vi.mock("@/lib/print-ticket-raw", () => ({
     reprint: "RISTAMPA",
     receipt: "SCONTRINO",
   },
-  buildRaw80mmTicket: vi.fn(() => Buffer.from("COMANDA", "ascii")),
-  buildRaw80mmDepartmentTicket: vi.fn(() => Buffer.from("COMANDE DIFFERENZIATE", "ascii")),
+  buildRaw80mmTicket: mocks.buildRaw80mmTicket,
+  buildRaw80mmDepartmentTicket: mocks.buildRaw80mmDepartmentTicket,
 }));
 vi.mock("@/lib/printnode", () => {
   class PrintNodeSubmissionError extends Error {
@@ -178,6 +184,11 @@ describe("POST /api/print-order", () => {
       active: true,
     });
     mocks.loadOrderForPrint.mockResolvedValue({ ok: true, order });
+    mocks.loadOrderAdditionSnapshot.mockResolvedValue({ ok: true, order });
+    mocks.buildRaw80mmTicket.mockReturnValue(Buffer.from("COMANDA", "ascii"));
+    mocks.buildRaw80mmDepartmentTicket.mockReturnValue(
+      Buffer.from("COMANDE DIFFERENZIATE", "ascii"),
+    );
     mocks.getPrinterAvailability.mockResolvedValue({
       configured: true,
       available: true,
@@ -208,6 +219,31 @@ describe("POST /api/print-order", () => {
       expect.objectContaining({ copies: 1, idempotencyKey: job.idempotency_key }),
     );
     expect(payload.outcome).toBe("printed");
+  });
+
+  it("costruisce l'aggiornamento usando solo le righe aggiunte", async () => {
+    const addedOrder = {
+      ...order,
+      items: [{ id: "solo-aggiunta", quantity: 1 }],
+    } as Order;
+    mocks.loadOrderAdditionSnapshot.mockResolvedValue({
+      ok: true,
+      order: addedOrder,
+    });
+    mocks.createClient.mockResolvedValue(supabaseMock(job));
+
+    const response = await POST(request());
+
+    expect(response.status).toBe(200);
+    expect(mocks.loadOrderAdditionSnapshot).toHaveBeenCalledWith(
+      expect.anything(),
+      order,
+      expect.objectContaining({ job_type: "order_update" }),
+    );
+    expect(mocks.buildRaw80mmDepartmentTicket).toHaveBeenCalledWith(
+      addedOrder,
+      "order_update",
+    );
   });
 
   it("mantiene tre copie PrintNode quando l'admin sceglie la modalità precedente", async () => {
