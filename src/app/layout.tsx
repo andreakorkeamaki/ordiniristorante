@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import "./operational-order.css";
+import "./operational-dashboard.css";
 import { ConnectionProvider } from "@/components/connection-provider";
 import { LegacyServiceWorkerCleanup } from "@/components/legacy-service-worker-cleanup";
 import { OfflineBanner } from "@/components/offline-banner";

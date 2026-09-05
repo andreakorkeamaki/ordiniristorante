@@ -20,7 +20,7 @@ export default async function TakeawayOrderPage({
     <>
       <AppHeader profile={profile} />
       <main className="workspace order-workspace">
-        <TableOrder orderId={id} profile={profile} />
+        <TableOrder key={id} orderId={id} profile={profile} />
       </main>
     </>
   );

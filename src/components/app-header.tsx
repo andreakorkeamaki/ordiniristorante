@@ -1,5 +1,8 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import type { AppRole, Profile } from "@/types/domain";
 import { logout } from "@/app/staff/actions";
 
@@ -20,6 +23,8 @@ const links: Record<AppRole, { href: string; label: string }[]> = {
 };
 
 export function AppHeader({ profile }: { profile: Profile }) {
+  const pathname = usePathname();
+
   return (
     <header className="app-header">
       <Link className="brand" href="/staff/tables">
@@ -38,11 +43,27 @@ export function AppHeader({ profile }: { profile: Profile }) {
         </span>
       </Link>
       <nav className="app-nav" aria-label="Navigazione staff">
-        {links[profile.role].map((link) => (
-          <Link href={link.href} key={link.href}>
-            {link.label}
-          </Link>
-        ))}
+        {links[profile.role].map((link) => {
+          const isTableRoute =
+            link.href === "/staff/tables" && pathname.startsWith("/staff/table/");
+          const isTakeawayRoute =
+            link.href === "/asporti" && pathname.startsWith("/staff/order/");
+          const isActive =
+            pathname === link.href ||
+            (link.href !== "/admin" && pathname.startsWith(`${link.href}/`)) ||
+            isTableRoute ||
+            isTakeawayRoute;
+          return (
+            <Link
+              className={isActive ? "is-active" : undefined}
+              href={link.href}
+              key={link.href}
+              aria-current={isActive ? "page" : undefined}
+            >
+              {link.label}
+            </Link>
+          );
+        })}
       </nav>
       <form action={logout}>
         <button className="text-button" type="submit">

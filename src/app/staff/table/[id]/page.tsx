@@ -20,7 +20,7 @@ export default async function TablePage({
     <>
       <AppHeader profile={profile} />
       <main className="workspace order-workspace">
-        <TableOrder tableId={id} profile={profile} />
+        <TableOrder key={id} tableId={id} profile={profile} />
       </main>
     </>
   );

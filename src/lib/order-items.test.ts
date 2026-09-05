@@ -3,6 +3,7 @@ import {
   aggregateIdenticalOrderItems,
   applyPendingQuantityDeltas,
   buildQuantityChangeOperations,
+  getIdenticalOrderItemIds,
   groupOrderItemsByPreparationArea,
 } from "@/lib/order-items";
 import type { OrderItem } from "@/types/domain";
@@ -36,8 +37,8 @@ function item({
           order_item_id: id,
           extra_name_snapshot: extraName,
           extra_price_snapshot: 1,
-          quantity: 1,
-          total: 1,
+          quantity,
+          total: quantity,
         }]
       : [],
   };
@@ -69,7 +70,7 @@ describe("aggregateIdenticalOrderItems", () => {
     expect(result).toHaveLength(3);
   });
 
-  it("somma anche quantità e totale degli extra identici", () => {
+  it("somma quantità e importi degli extra nelle righe aggregate", () => {
     const result = aggregateIdenticalOrderItems([
       item({ id: "item-1", extraName: "Mozzarella" }),
       item({ id: "item-2", extraName: "Mozzarella" }),
@@ -81,6 +82,21 @@ describe("aggregateIdenticalOrderItems", () => {
       quantity: 2,
       total: 2,
     });
+  });
+});
+
+describe("getIdenticalOrderItemIds", () => {
+  it("mappa una variante visualizzata alle sue righe raw", () => {
+    expect(
+      getIdenticalOrderItemIds(
+        [
+          item({ id: "item-1", extraName: "Mozzarella" }),
+          item({ id: "item-2", extraName: "Mozzarella" }),
+          item({ id: "item-3", notes: "Senza glutine" }),
+        ],
+        "item-1",
+      ),
+    ).toEqual(["item-1", "item-2"]);
   });
 });
 
@@ -189,6 +205,20 @@ describe("groupOrderItemsByPreparationArea", () => {
       "bar",
       "cassa",
     ]);
+  });
+
+  it("unisce in preparazione la stessa variante con extra su più quantità", () => {
+    const result = groupOrderItemsByPreparationArea([
+      item({ id: "pizza-1", quantity: 2, extraName: "Mozzarella" }),
+      item({ id: "pizza-2", quantity: 3, extraName: "Mozzarella" }),
+    ]);
+
+    expect(result[0].items).toHaveLength(1);
+    expect(result[0].items[0]).toMatchObject({ quantity: 5 });
+    expect(result[0].items[0].extras[0]).toMatchObject({
+      quantity: 5,
+      total: 5,
+    });
   });
 
   it("ignora correzioni di prezzo nell'aggregazione destinata ai reparti", () => {

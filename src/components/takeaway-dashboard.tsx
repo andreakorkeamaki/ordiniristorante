@@ -41,6 +41,7 @@ export function TakeawayDashboard() {
   const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
   const [query, setQuery] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [pickupAt, setPickupAt] = useState(getCurrentLocalDateTime);
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -50,10 +51,15 @@ export function TakeawayDashboard() {
   const [loadError, setLoadError] = useState("");
   const loadGeneration = useRef(0);
   const hasSnapshot = useRef(false);
+  const staticProfiles = useRef<Profile[] | null>(null);
+  const staticProfilesRevision = useRef(0);
+  const loadInFlight = useRef<Promise<void> | null>(null);
+  const loadRequestedWhileInFlight = useRef(false);
+  const loadRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const canWrite =
     connectionCanWrite && dataState === "ready" && serviceState === "ready";
 
-  const load = useCallback(async () => {
+  const performLoad = useCallback(async () => {
     if (serviceLoading) return;
     if (serviceState !== "ready") {
       setLoadError(
@@ -64,6 +70,7 @@ export function TakeawayDashboard() {
       return;
     }
     const generation = ++loadGeneration.current;
+    const profilesRevision = staticProfilesRevision.current;
 
     const supabase = createClient();
     const [ordersResult, profilesResult] = await Promise.all([
@@ -74,10 +81,12 @@ export function TakeawayDashboard() {
         )
         .eq("order_type", "takeaway")
         .in("status", [...ACTIVE_ORDER_STATUSES]),
-      supabase
-        .from("profiles")
-        .select("id, full_name, role, active")
-        .eq("active", true),
+      staticProfiles.current
+        ? Promise.resolve({ data: staticProfiles.current, error: null })
+        : supabase
+            .from("profiles")
+            .select("id, full_name, role, active")
+            .eq("active", true),
     ]);
     const error = ordersResult.error ?? profilesResult.error;
     if (error) {
@@ -97,9 +106,13 @@ export function TakeawayDashboard() {
           )
         : [],
     );
+    const loadedProfiles = (profilesResult.data ?? []) as Profile[];
+    if (profilesRevision === staticProfilesRevision.current) {
+      staticProfiles.current = loadedProfiles;
+    }
     setProfiles(
       new Map(
-        ((profilesResult.data ?? []) as Profile[]).map((profile) => [
+        loadedProfiles.map((profile) => [
           profile.id,
           profile,
         ]),
@@ -110,6 +123,27 @@ export function TakeawayDashboard() {
     setDataState("ready");
     setLoading(false);
   }, [markUnreliable, service, serviceError, serviceLoading, serviceState]);
+  const load = useCallback(async () => {
+    if (loadInFlight.current) {
+      loadRequestedWhileInFlight.current = true;
+      await loadInFlight.current;
+      return;
+    }
+    const request = performLoad();
+    loadInFlight.current = request;
+    try {
+      await request;
+    } finally {
+      loadInFlight.current = null;
+      if (loadRequestedWhileInFlight.current) {
+        loadRequestedWhileInFlight.current = false;
+        void loadRef.current();
+      }
+    }
+  }, [performLoad]);
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
   const scheduleLoad = useCoalescedRefresh(load);
 
   useEffect(() => {
@@ -137,6 +171,15 @@ export function TakeawayDashboard() {
         "postgres_changes",
         { event: "*", schema: "public", table: "print_jobs" },
         scheduleLoad,
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "profiles" },
+        () => {
+          staticProfilesRevision.current += 1;
+          staticProfiles.current = null;
+          scheduleLoad();
+        },
       )
       .subscribe((channelStatus: string) => {
         if (isRealtimeFailureStatus(channelStatus)) {
@@ -206,6 +249,7 @@ export function TakeawayDashboard() {
             disabled={!canWrite || !serviceOperational}
             onClick={() => {
               setFormError("");
+              setPickupAt(getCurrentLocalDateTime());
               setShowForm(true);
             }}
             type="button"
@@ -248,6 +292,7 @@ export function TakeawayDashboard() {
               const orderItems = groupOrderItemsByPreparationArea(
                 order.items ?? [],
               ).flatMap((department) => department.items);
+              const urgency = getTakeawayUrgency(order.takeaway_pickup_at);
 
               return (
                 <Link
@@ -266,6 +311,13 @@ export function TakeawayDashboard() {
                       ? `Ritiro ${formatTime(order.takeaway_pickup_at)}`
                       : "Ora da definire"}
                   </time>
+                  {urgency && (
+                    <span
+                      className={`takeaway-urgency urgency-${urgency.tone}`}
+                    >
+                      {urgency.label}
+                    </span>
+                  )}
                   <span className="status-label">
                     {ORDER_STATUS_LABELS[order.status]}
                   </span>
@@ -335,12 +387,26 @@ export function TakeawayDashboard() {
               <input
                 name="pickup_at"
                 type="datetime-local"
-                defaultValue={getCurrentLocalDateTime()}
+                value={pickupAt}
+                onChange={(event) => setPickupAt(event.target.value)}
                 min={service ? `${service.business_date}T00:00` : undefined}
                 max={service ? `${service.business_date}T23:59` : undefined}
                 required
               />
             </label>
+              <div className="pickup-quick-options" role="group" aria-label="Orario rapido di ritiro">
+                <span>Imposta tra</span>
+                {[15, 30, 45].map((minutes) => (
+                  <button
+                    className="quick-filter"
+                    key={minutes}
+                    onClick={() => setPickupAt(getLocalDateTimeInMinutes(minutes))}
+                    type="button"
+                  >
+                    +{minutes} min
+                  </button>
+                ))}
+              </div>
             {formError && <p className="form-error">{formError}</p>}
             <button className="button button-primary" disabled={creating}>
               {creating ? "Creazione…" : "Crea e apri comanda"}
@@ -387,6 +453,21 @@ function getCurrentLocalDateTime() {
   const now = new Date();
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);
+}
+
+function getLocalDateTimeInMinutes(minutes: number) {
+  const date = new Date(Date.now() + minutes * 60_000);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function getTakeawayUrgency(value: string | null) {
+  if (!value) return null;
+  const minutesUntilPickup = (new Date(value).getTime() - Date.now()) / 60_000;
+  if (minutesUntilPickup < 0) return { label: "In ritardo", tone: "overdue" } as const;
+  if (minutesUntilPickup <= 15) return { label: "Tra poco", tone: "soon" } as const;
+  if (minutesUntilPickup <= 30) return { label: "Entro 30 min", tone: "upcoming" } as const;
+  return null;
 }
 
 function takeawayStatusPriority(order: Order) {

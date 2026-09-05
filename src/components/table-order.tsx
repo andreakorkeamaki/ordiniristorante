@@ -1,1288 +1,439 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useConnection } from "@/components/connection-provider";
 import { useCoalescedRefresh } from "@/hooks/use-coalesced-refresh";
-import { QUICK_NOTES, ORDER_STATUS_LABELS } from "@/lib/constants";
-import { formatCurrency } from "@/lib/format";
-import { reportOperationalError } from "@/lib/operational-client-log";
-import type { OperationalEvent } from "@/lib/operational-events";
-import {
-  aggregateMenuItemQuantities,
-  getOrderSubmissionIssue,
-} from "@/lib/order-calculations";
-import { shouldFlagExternalOrderUpdate } from "@/lib/order-realtime";
-import {
-  canEditOrder,
-  canSendOrderUpdate,
-} from "@/lib/order-workflow";
-import { getOrderShortLabel } from "@/lib/order-display";
-import {
-  aggregateIdenticalOrderItems,
-  applyPendingQuantityDeltas,
-  buildQuantityChangeOperations,
-} from "@/lib/order-items";
-import { formatServiceLabel, isPreviousService } from "@/lib/service-management";
-import {
-  isRealtimeFailureStatus,
-  isRealtimeSubscribedStatus,
-} from "@/lib/realtime-status";
-import { createClient } from "@/lib/supabase/client";
 import { useCurrentService } from "@/hooks/use-current-service";
-import type {
-  MenuCategory,
-  MenuExtra,
-  MenuItem,
-  Order,
-  OrderItem,
-  OrderStatus,
-  PrintJobType,
-  PrintStatus,
-  Profile,
-  RestaurantTable,
-} from "@/types/domain";
+import { ACTIVE_ORDER_STATUSES, ORDER_STATUS_LABELS } from "@/lib/constants";
+import { formatCurrency } from "@/lib/format";
+import { aggregateMenuItemQuantities } from "@/lib/order-calculations";
+import { aggregateIdenticalOrderItems, getIdenticalOrderItemIds } from "@/lib/order-items";
+import { getInitialPrintDecision } from "@/lib/automatic-print-policy";
+import { canEditOrder } from "@/lib/order-workflow";
+import { getOrderShortLabel } from "@/lib/order-display";
+import { formatServiceLabel, isPreviousService } from "@/lib/service-management";
+import { isRealtimeFailureStatus, isRealtimeSubscribedStatus } from "@/lib/realtime-status";
+import { createClient } from "@/lib/supabase/client";
+import { OrderEditQueue } from "@/lib/order-edit-queue";
+import { orderEditPayload, mergeOrderEdits, orderItemVariant, projectOrderEdit, type OrderEdit, type OrderSnapshot } from "@/lib/optimistic-order";
+import type { MenuCategory, MenuExtra, MenuItem, Order, OrderItem, Profile, RestaurantTable } from "@/types/domain";
 
-type MutationTask = () => Promise<void>;
-type QuantityPhase = "idle" | "collecting" | "flushing";
+const EMPTY_SNAPSHOT: OrderSnapshot = { order: null, items: [], update_print_status: null };
+type NoteDraft = { value: string; original: string };
 
-const QUANTITY_BATCH_DELAY_MS = 250;
-const MAX_COVER_COUNT = 99;
-
-export function TableOrder({
-  tableId,
-  orderId: requestedOrderId,
-  profile,
-}: {
-  tableId?: string;
-  orderId?: string;
-  profile: Profile;
+export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
+  tableId?: string; orderId?: string; profile: Profile;
 }) {
+  const router = useRouter();
   const takeawayMode = Boolean(requestedOrderId);
-  const {
-    status,
-    canWrite: connectionCanWrite,
-    blockReason,
-    markUnreliable,
-  } = useConnection();
-  const {
-    service,
-    loading: serviceLoading,
-    error: serviceError,
-    state: serviceState,
-  } = useCurrentService();
+  const { status, canWrite: connectionCanWrite, blockReason, markUnreliable, verify } = useConnection();
+  const { service, loading: serviceLoading, error: serviceError, state: serviceState } = useCurrentService();
+  const [queue] = useState(() => new OrderEditQueue<OrderSnapshot, OrderEdit>(
+    EMPTY_SNAPSHOT, projectOrderEdit,
+    async (command, base) => {
+      const { data, error } = await createClient().rpc("apply_order_edit", {
+        p_order_id: base.order?.id, p_operation_id: command.id, p_edit: orderEditPayload(command.edit),
+      });
+      if (error) throw error;
+      if (!data?.order || !Array.isArray(data.items)) throw new Error("Conferma del salvataggio incompleta. Riprova la stessa operazione.");
+      return data as OrderSnapshot;
+    },
+    errorMessage, mergeOrderEdits,
+  ));
+  const queueState = useSyncExternalStore(queue.subscribe, queue.getSnapshot, queue.getSnapshot);
+  const { order, items, update_print_status: updatePrintStatus } = queueState.visible;
   const [table, setTable] = useState<RestaurantTable | null>(null);
-  const [order, setOrder] = useState<Order | null>(null);
-  const [items, setItems] = useState<OrderItem[]>([]);
   const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [extras, setExtras] = useState<MenuExtra[]>([]);
   const [activeCategory, setActiveCategory] = useState("");
   const [search, setSearch] = useState("");
-  const [saving, setSaving] = useState<"saved" | "saving" | "error">("saved");
-  const [quantityPhase, setQuantityPhase] = useState<QuantityPhase>("idle");
-  const [pendingQuantityDeltas, setPendingQuantityDeltas] = useState<
-    Record<string, number>
-  >({});
-  const [submitting, setSubmitting] = useState(false);
-  const [mutationError, setMutationError] = useState("");
-  const [coverPickerOpen, setCoverPickerOpen] = useState(false);
-  const [coverDraft, setCoverDraft] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [dataReady, setDataReady] = useState(false);
+  const [catalogueReady, setCatalogueReady] = useState(false);
+  const [catalogueError, setCatalogueError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [message, setMessage] = useState("");
   const [presence, setPresence] = useState<string[]>([]);
   const [externalUpdate, setExternalUpdate] = useState(false);
-  const [updatePrintStatus, setUpdatePrintStatus] = useState<PrintStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const selfUpdate = useRef(false);
-  const mutationInFlight = useRef(false);
-  const quantityPhaseRef = useRef<QuantityPhase>("idle");
-  const pendingQuantityDeltasRef = useRef<Record<string, number>>({});
-  const quantityFlushTimer = useRef<number | null>(null);
-  const itemsRef = useRef<OrderItem[]>([]);
-  const orderPanelRef = useRef<HTMLElement>(null);
+  const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
-  const initialLoadStarted = useRef(false);
-  const baseLoaded = useRef(false);
-  const loadedSuccessfully = useRef(false);
-  const wasBlocked = useRef(false);
-  const orderLoadGeneration = useRef(0);
-  const baseLoadGeneration = useRef(0);
-  const [dataState, setDataState] = useState<"loading" | "ready" | "stale" | "error">(
-    "loading",
-  );
-  const [loadError, setLoadError] = useState("");
-  const canWrite =
-    connectionCanWrite && dataState === "ready" && serviceState === "ready";
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [quantityPicker, setQuantityPicker] = useState<{ item?: OrderItem; product?: MenuItem; covers?: boolean } | null>(null);
+  const [quantityDraft, setQuantityDraft] = useState("1");
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, NoteDraft>>({});
+  const noteDraftsRef = useRef(noteDrafts);
+  const orderPanelRef = useRef<HTMLElement>(null);
+  const pickerRef = useRef<HTMLDialogElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const initialLoad = useRef(false);
+  const loadGeneration = useRef(0);
+  const catalogueGeneration = useRef(0);
+  const refreshDeferred = useRef(false);
+  const hasLoaded = useRef(false);
 
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
+  const serviceOperational = Boolean(service && !isPreviousService(service));
+  const operationsEnabled = connectionCanWrite && dataReady && catalogueReady && serviceState === "ready" && serviceOperational;
+  const writeEnabled = operationsEnabled && Boolean(order && canEditOrder(order.status)) && !submitting && !queueState.error;
+  const pendingCount = queueState.pending.length;
+  const saving = queueState.error ? "error" : pendingCount ? "saving" : "saved";
 
-  const loadOrder = useCallback(
-    async (create = false) => {
-      const generation = ++orderLoadGeneration.current;
+  const loadOrder = useCallback(async (create = false, recover = false) => {
+    if (queue.getSnapshot().pending.length && !recover) { refreshDeferred.current = true; return; }
+    const generation = ++loadGeneration.current;
+    const revision = queue.getRevision();
+    try {
       const supabase = createClient();
-      let currentOrder: Order | null = null;
-
-      if (takeawayMode) {
-        const { data, error } = await supabase
-          .from("orders")
-          .select("*")
-          .eq("id", requestedOrderId!)
-          .eq("order_type", "takeaway")
-          .in("status", ["draft", "pending_cashier", "confirmed", "in_preparation", "bill_requested"])
-          .maybeSingle();
-        if (error) {
-          if (generation !== orderLoadGeneration.current) return;
-          setSaving("error");
-          setLoadError("Ordine non aggiornato. Le modifiche restano bloccate.");
-          setDataState(loadedSuccessfully.current ? "stale" : "error");
-          if (isConnectionFailure(error)) markUnreliable();
-          setLoading(false);
-          return;
-        }
-        currentOrder = data as Order | null;
-      } else if (create && tableId) {
-        const { data, error } = await supabase.rpc("get_or_create_active_order", {
-          p_table_id: tableId,
-        });
-        if (error) {
-          if (generation !== orderLoadGeneration.current) return;
-          setSaving("error");
-          setLoadError("Creazione ordine non confermata dal server.");
-          setDataState(loadedSuccessfully.current ? "stale" : "error");
-          if (isConnectionFailure(error)) markUnreliable();
-          setLoading(false);
-          return;
-        }
-        currentOrder = data as Order;
-      } else if (tableId) {
-        const { data, error } = await supabase
-          .from("orders")
-          .select("*")
-          .eq("table_id", tableId)
-          .in("status", ["draft", "pending_cashier", "confirmed", "in_preparation", "bill_requested"])
-          .maybeSingle();
-        if (error) {
-          if (generation !== orderLoadGeneration.current) return;
-          setSaving("error");
-          setLoadError("Ordine non aggiornato. Le modifiche restano bloccate.");
-          setDataState(loadedSuccessfully.current ? "stale" : "error");
-          if (isConnectionFailure(error)) markUnreliable();
-          setLoading(false);
-          return;
-        }
-        currentOrder = data as Order | null;
+      const result = takeawayMode
+        ? await supabase.from("orders").select("*").eq("id", requestedOrderId!).eq("order_type", "takeaway").in("status", [...ACTIVE_ORDER_STATUSES]).maybeSingle()
+        : create
+          ? await supabase.rpc("get_or_create_active_order", { p_table_id: tableId })
+          : await supabase.from("orders").select("*").eq("table_id", tableId!).in("status", ["draft", "pending_cashier", "confirmed", "in_preparation", "bill_requested"]).maybeSingle();
+      if (result.error) throw result.error;
+      const current = result.data as Order | null;
+      let snapshot: OrderSnapshot = { ...EMPTY_SNAPSHOT, order: current };
+      if (current) {
+        const { data, error } = await supabase.rpc("get_order_edit_snapshot", { p_order_id: current.id });
+        if (error) throw error;
+        if (!data?.order || !Array.isArray(data.items)) throw new Error("Comanda non disponibile.");
+        snapshot = data as OrderSnapshot;
       }
-
-      if (!currentOrder) {
-        if (generation !== orderLoadGeneration.current) return;
-        setOrder(null);
-        setItems([]);
-        setUpdatePrintStatus(null);
-        setLoading(false);
-        setLoadError("");
-        setDataState("ready");
-        return;
-      }
-
-      const [linesResult, updateJobResult] = await Promise.all([
-        supabase
-          .from("order_items")
-          .select("*, extras:order_item_extras(*)")
-          .eq("order_id", currentOrder.id)
-          .order("created_at"),
-        supabase
-          .from("print_jobs")
-          .select("status")
-          .eq("order_id", currentOrder.id)
-          .eq("job_type", "order_update")
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-      ]);
-      const loadError = linesResult.error ?? updateJobResult.error;
-      if (loadError) {
-        if (generation !== orderLoadGeneration.current) return;
-        setSaving("error");
-        setLoadError("Righe ordine non aggiornate. Lo snapshot precedente resta visibile.");
-        setDataState(loadedSuccessfully.current ? "stale" : "error");
-        if (isConnectionFailure(loadError)) markUnreliable();
-        setLoading(false);
-        return;
-      }
-      if (generation !== orderLoadGeneration.current) return;
-      setOrder(currentOrder);
-      setItems((linesResult.data ?? []) as OrderItem[]);
-      setUpdatePrintStatus(
-        (updateJobResult.data?.status as PrintStatus | undefined) ?? null,
-      );
-      if (quantityPhaseRef.current === "idle") setSaving("saved");
-      loadedSuccessfully.current = true;
-      setLoadError("");
-      setDataState("ready");
-      setLoading(false);
-    },
-    [markUnreliable, requestedOrderId, tableId, takeawayMode],
-  );
+      if (generation !== loadGeneration.current) return;
+      const accepted = recover ? queue.discardAndAccept(snapshot) : queue.acceptSnapshot(snapshot, revision);
+      if (!accepted) { refreshDeferred.current = true; return; }
+      setLoadError(""); setDataReady(true); hasLoaded.current = true;
+    } catch (error) {
+      if (generation !== loadGeneration.current) return;
+      setLoadError(`Comanda non aggiornata. ${errorMessage(error)}`); setDataReady(false);
+    } finally { if (generation === loadGeneration.current) setLoading(false); }
+  }, [queue, requestedOrderId, tableId, takeawayMode]);
   const scheduleOrderRefresh = useCoalescedRefresh(loadOrder);
 
-  const loadBase = useCallback(async (createOrder: boolean) => {
-    const generation = ++baseLoadGeneration.current;
+  const loadCatalogue = useCallback(async () => {
+    const generation = ++catalogueGeneration.current;
     const supabase = createClient();
-    const [tableResult, categoryResult, itemResult, extraResult] = await Promise.all([
-      tableId
-        ? supabase.from("restaurant_tables").select("*").eq("id", tableId).single()
-        : Promise.resolve({ data: null, error: null }),
-      supabase
-        .from("menu_categories")
-        .select("*")
-        .eq("active", true)
-        .order("sort_order")
-        .order("name"),
-      supabase
-        .from("menu_items")
-        .select("*")
-        .eq("active", true)
-        .eq("visible_staff", true)
-        .order("category_id")
-        .order("sort_order")
-        .order("name"),
+    const [tables, categoryResult, products, additions] = await Promise.all([
+      tableId ? supabase.from("restaurant_tables").select("*").eq("id", tableId).single() : Promise.resolve({ data: null, error: null }),
+      supabase.from("menu_categories").select("*").eq("active", true).order("sort_order").order("name"),
+      supabase.from("menu_items").select("*").eq("active", true).eq("visible_staff", true).order("category_id").order("sort_order").order("name"),
       supabase.from("menu_extras").select("*").eq("active", true).eq("visible_staff", true).order("sort_order"),
     ]);
-    const firstError =
-      tableResult.error ?? categoryResult.error ?? itemResult.error ?? extraResult.error;
-    if (firstError) {
-      if (generation !== baseLoadGeneration.current) return;
-      if (isConnectionFailure(firstError)) markUnreliable();
-      setSaving("error");
-      setLoadError("Menu o dati tavolo non disponibili. Riprova.");
-      setDataState(baseLoaded.current ? "stale" : "error");
-      setLoading(false);
-      return;
-    }
-    if (generation !== baseLoadGeneration.current) return;
-
-    const loadedCategories = (categoryResult.data ?? []) as MenuCategory[];
-    setTable((tableResult.data as RestaurantTable | null) ?? null);
-    setCategories(loadedCategories);
-    setMenuItems((itemResult.data ?? []) as MenuItem[]);
-    setExtras((extraResult.data ?? []) as MenuExtra[]);
-    setActiveCategory((current) => current || loadedCategories[0]?.id || "");
-    await loadOrder(createOrder);
-    baseLoaded.current = true;
-  }, [loadOrder, markUnreliable, tableId]);
-
-  const mutate = useCallback(
-    async (
-      event: OperationalEvent,
-      task: MutationTask,
-      allowQuantityBatch = false,
-    ) => {
-      const serviceAvailable = Boolean(service && !isPreviousService(service));
-      if (!canWrite || !serviceAvailable) {
-        setSaving("error");
-        setMutationError(
-          !canWrite
-            ? blockReason ?? "Connessione non verificata. Operazione non eseguita."
-            : "Il servizio non è aperto o appartiene a un giorno precedente.",
-        );
-        return false;
-      }
-      if (
-        mutationInFlight.current ||
-        submittingRef.current ||
-        (!allowQuantityBatch && quantityPhaseRef.current !== "idle")
-      ) {
-        setMutationError("Salvataggio già in corso. Attendi un momento e ripeti il comando.");
-        return false;
-      }
-
-      mutationInFlight.current = true;
-      setSaving("saving");
-      setMutationError("");
-      selfUpdate.current = true;
-      try {
-        await task();
-        await loadOrder();
-        return true;
-      } catch (error) {
-        reportOperationalError({ event, error, orderId: order?.id });
-        const connectionFailure = isConnectionFailure(error);
-        if (connectionFailure) {
-          markUnreliable();
-        } else {
-          // Domain errors such as optimistic-lock conflicts mean the local
-          // order snapshot may be stale. Refresh it before allowing another
-          // edit; never retry the mutation automatically.
-          await loadOrder();
-        }
-        setSaving("error");
-        setMutationError(
-          connectionFailure
-            ? getErrorMessage(error)
-            : `${getErrorMessage(error)} La comanda è stata ricaricata: verifica i dati prima di ripetere.`,
-        );
-        return false;
-      } finally {
-        mutationInFlight.current = false;
-        window.setTimeout(() => {
-          selfUpdate.current = false;
-        }, 500);
-      }
-    },
-    [blockReason, canWrite, loadOrder, markUnreliable, order?.id, service],
-  );
-
-  const flushQuantityChanges = useCallback(async () => {
-    if (quantityFlushTimer.current !== null) {
-      window.clearTimeout(quantityFlushTimer.current);
-      quantityFlushTimer.current = null;
-    }
-
-    const changes = Object.entries(pendingQuantityDeltasRef.current)
-      .filter(([, delta]) => delta !== 0);
-    if (changes.length === 0) {
-      quantityPhaseRef.current = "idle";
-      setQuantityPhase("idle");
-      setSaving("saved");
-      return;
-    }
-
-    quantityPhaseRef.current = "flushing";
-    setQuantityPhase("flushing");
-    const succeeded = await mutate(
-      "order_item_quantity_change_failed",
-      async () => {
-        const operations = changes.flatMap(([itemId, delta]) =>
-          buildQuantityChangeOperations(itemsRef.current, itemId, delta),
-        );
-        if (operations.length === 0) {
-          throw new Error("La riga non è più disponibile.");
-        }
-
-        const results = await Promise.all(
-          operations.map(({ itemId, delta }) =>
-            createClient().rpc("change_order_item_quantity", {
-              p_item_id: itemId,
-              p_delta: delta,
-            }),
-          ),
-        );
-        const firstError = results.find((result) => result.error)?.error;
-        if (firstError) throw firstError;
-      },
-      true,
-    );
-
-    pendingQuantityDeltasRef.current = {};
-    setPendingQuantityDeltas({});
-    quantityPhaseRef.current = "idle";
-    setQuantityPhase("idle");
-    if (succeeded) setSaving("saved");
-  }, [mutate]);
+    if (generation !== catalogueGeneration.current) return;
+    const error = tables.error ?? categoryResult.error ?? products.error ?? additions.error;
+    if (error) { setCatalogueError(`Catalogo non aggiornato. ${errorMessage(error)}`); setCatalogueReady(false); return; }
+    const loaded = (categoryResult.data ?? []) as MenuCategory[];
+    setCatalogueReady(true); setCatalogueError("");
+    setTable(tables.data as RestaurantTable | null);
+    setCategories(loaded); setMenuItems((products.data ?? []) as MenuItem[]); setExtras((additions.data ?? []) as MenuExtra[]);
+    const selectable = loaded.filter((category) => category.slug !== "extra" && !(takeawayMode && category.slug === "all-you-can-eat"));
+    setActiveCategory((current) => selectable.some((category) => category.id === current) ? current : selectable[0]?.id ?? "");
+    return true;
+  }, [tableId, takeawayMode]);
+  const scheduleCatalogueRefresh = useCoalescedRefresh(async () => {
+    if (await loadCatalogue()) await loadOrder();
+  });
 
   useEffect(() => {
-    const flushWhenHidden = () => {
-      if (
-        document.visibilityState === "hidden" &&
-        quantityPhaseRef.current === "collecting"
-      ) {
-        void flushQuantityChanges();
-      }
-    };
-    document.addEventListener("visibilitychange", flushWhenHidden);
-
-    return () => {
-      document.removeEventListener("visibilitychange", flushWhenHidden);
-      if (quantityPhaseRef.current === "collecting") {
-        void flushQuantityChanges();
-      } else if (quantityFlushTimer.current !== null) {
-        window.clearTimeout(quantityFlushTimer.current);
-        quantityFlushTimer.current = null;
-      }
-    };
-  }, [flushQuantityChanges]);
-
-  useEffect(() => {
-    if (
-      status === "checking" ||
-      serviceLoading ||
-      initialLoadStarted.current
-    ) {
-      return;
-    }
-    initialLoadStarted.current = true;
-    queueMicrotask(() =>
-      void loadBase(Boolean(canWrite && service && !isPreviousService(service))),
-    );
-  }, [canWrite, loadBase, service, serviceLoading, status]);
-
-  useEffect(() => {
-    if (
-      !initialLoadStarted.current ||
-      !baseLoaded.current ||
-      !canWrite ||
-      !service ||
-      isPreviousService(service) ||
-      order ||
-      takeawayMode
-    ) {
-      return;
-    }
-    queueMicrotask(() => void loadOrder(true));
-  }, [canWrite, loadOrder, order, service, takeawayMode]);
-
-  useEffect(() => {
-    if (status !== "online") {
-      wasBlocked.current = true;
-      return;
-    }
-    if (!wasBlocked.current) return;
-    wasBlocked.current = false;
-    queueMicrotask(() => {
-      if (loadedSuccessfully.current) void loadOrder();
-      else void loadBase(true);
+    if (status === "checking" || serviceLoading || initialLoad.current) return;
+    initialLoad.current = true;
+    queueMicrotask(async () => {
+      const loaded = await loadCatalogue();
+      if (loaded) await loadOrder(Boolean(connectionCanWrite && service && !isPreviousService(service)));
+      else setLoading(false);
     });
-  }, [loadBase, loadOrder, status]);
+  }, [connectionCanWrite, loadCatalogue, loadOrder, service, serviceLoading, status]);
+
+  useEffect(() => {
+    if (status !== "online" || !hasLoaded.current) return;
+    scheduleCatalogueRefresh();
+  }, [status, scheduleCatalogueRefresh]);
+
+  useEffect(() => {
+    if (!pendingCount && !queueState.running && !queueState.error && refreshDeferred.current) {
+      refreshDeferred.current = false; scheduleOrderRefresh();
+    }
+  }, [pendingCount, queueState.running, queueState.error, scheduleOrderRefresh]);
+
+  useEffect(() => {
+    const supabase = createClient();
+    const channel = supabase.channel(`order-catalogue:${tableId ?? requestedOrderId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "menu_items" }, scheduleCatalogueRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "menu_categories" }, scheduleCatalogueRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "menu_extras" }, scheduleCatalogueRefresh)
+      .subscribe((state: string) => {
+        if (isRealtimeFailureStatus(state)) { setCatalogueReady(false); setCatalogueError("Aggiornamenti del catalogo interrotti. Riprova."); }
+        if (isRealtimeSubscribedStatus(state) && hasLoaded.current) scheduleCatalogueRefresh();
+      });
+    return () => { void supabase.removeChannel(channel); };
+  }, [requestedOrderId, scheduleCatalogueRefresh, tableId]);
 
   const orderId = order?.id;
-
   useEffect(() => {
     if (!orderId) return;
     const supabase = createClient();
-    let subscribed = false;
-    const changes = supabase
-      .channel(`order:${orderId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "orders", filter: `id=eq.${orderId}` },
-        (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-          if (
-            shouldFlagExternalOrderUpdate({
-              profileId: profile.id,
-              selfUpdate: selfUpdate.current,
-              newRow: payload.new,
-              oldRow: payload.old,
-            })
-          ) {
-            setExternalUpdate(true);
-          }
-          scheduleOrderRefresh();
-        },
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "order_items", filter: `order_id=eq.${orderId}` },
-        (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-          if (
-            shouldFlagExternalOrderUpdate({
-              profileId: profile.id,
-              selfUpdate: selfUpdate.current,
-              newRow: payload.new,
-              oldRow: payload.old,
-            })
-          ) {
-            setExternalUpdate(true);
-          }
-          scheduleOrderRefresh();
-        },
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "print_jobs", filter: `order_id=eq.${orderId}` },
-        scheduleOrderRefresh,
-      )
-      .subscribe((channelStatus: string) => {
-        if (isRealtimeFailureStatus(channelStatus)) {
-          markUnreliable();
-          setSaving("error");
-          setLoadError("Aggiornamenti della comanda interrotti. Riconnessione in corso.");
-          setDataState(loadedSuccessfully.current ? "stale" : "error");
-          return;
-        }
-        if (isRealtimeSubscribedStatus(channelStatus)) {
-          if (subscribed) scheduleOrderRefresh();
-          subscribed = true;
-        }
-      });
-
-    const room = supabase.channel(
-      tableId ? `table:${tableId}` : `table:takeaway:${orderId}`,
-      {
-      config: { presence: { key: profile.id }, private: true },
-      },
-    );
-    room
-      .on("presence", { event: "sync" }, () => {
-        const names = Object.values(room.presenceState())
-          .flat()
-          .map((entry) => {
-            const payload = entry as { name?: string };
-            return String(payload.name ?? "Staff");
-          });
-        setPresence([...new Set(names)]);
+    const channel = supabase.channel(`order:${orderId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `id=eq.${orderId}` }, (payload: { new: Record<string, unknown> }) => {
+        if (payload.new.updated_by && payload.new.updated_by !== profile.id) setExternalUpdate(true);
+        scheduleOrderRefresh();
       })
-      .subscribe(async (status: string) => {
-        if (status === "SUBSCRIBED") {
-          await room.track({ user_id: profile.id, name: profile.full_name, online_at: new Date().toISOString() });
-        }
+      .on("postgres_changes", { event: "*", schema: "public", table: "print_jobs", filter: `order_id=eq.${orderId}` }, scheduleOrderRefresh)
+      .subscribe((state: string) => {
+        if (isRealtimeFailureStatus(state)) { setDataReady(false); setLoadError("Aggiornamenti della comanda interrotti. Riprova."); }
+        if (isRealtimeSubscribedStatus(state)) scheduleOrderRefresh();
       });
+    const room = supabase.channel(tableId ? `table:${tableId}` : `table:takeaway:${orderId}`, { config: { presence: { key: profile.id }, private: true } });
+    room.on("presence", { event: "sync" }, () => {
+      setPresence([...new Set(Object.values(room.presenceState()).flat().filter((entry) => (entry as { user_id?: string }).user_id !== profile.id).map((entry) => String((entry as { name?: string }).name ?? "Staff")))]);
+    }).subscribe(async (state: string) => { if (state === "SUBSCRIBED") await room.track({ user_id: profile.id, name: profile.full_name }); });
+    return () => { void supabase.removeChannel(channel); void supabase.removeChannel(room); };
+  }, [orderId, profile.full_name, profile.id, scheduleOrderRefresh, tableId]);
 
-    return () => {
-      void supabase.removeChannel(changes);
-      void supabase.removeChannel(room);
+  const enqueue = useCallback((edit: OrderEdit, label: string) => {
+    if (!operationsEnabled || submittingRef.current || queue.getSnapshot().error) return false;
+    const current = queue.getSnapshot().visible;
+    const scopedIds = edit.type === "quantity" || edit.type === "remove" ? edit.item_ids :
+      edit.type === "note" || edit.type === "extra" || edit.type === "remove_extra" ? [edit.item_id] : [];
+    const rawItems = current.items.filter((item) => scopedIds.includes(item.id));
+    if (scopedIds.length && rawItems.length !== scopedIds.length) { setMessage("La riga è cambiata. Selezionala di nuovo."); return false; }
+    if (edit.type !== "remove" && rawItems.some((item) => item.extras.some((extra) => extra.quantity % item.quantity !== 0))) {
+      setMessage("Questa riga precedente contiene extra su quantità diverse. Aggiungi una nuova variante per modificarla."); return false;
+    }
+    const command: OrderEdit = { ...edit,
+      ...(rawItems.length ? { expected_variants: Object.fromEntries(rawItems.map((item) => [item.id, orderItemVariant(item)])) } : {}),
+      ...(edit.type === "note" || edit.type === "extra" || edit.type === "remove_extra" ? { expected_quantity: rawItems[0].quantity } : {}),
+      ...(edit.type === "details" && edit.cover_count !== undefined ? { expected_cover_count: current.order?.cover_count } : {}),
     };
-  }, [markUnreliable, orderId, profile.full_name, profile.id, scheduleOrderRefresh, tableId]);
+    setMessage("");
+    return queue.enqueue({ id: crypto.randomUUID(), edit: command, label });
+  }, [operationsEnabled, queue]);
 
-  const visibleProducts = useMemo(() => {
-    const needle = search.toLowerCase().trim();
-    const takeawayCategoryIds = new Set(
-      categories
-        .filter((category) => category.slug === "all-you-can-eat")
-        .map((category) => category.id),
-    );
-    return menuItems.filter((item) => {
-      if (takeawayMode && takeawayCategoryIds.has(item.category_id)) return false;
-      const matchesCategory = search ? true : item.category_id === activeCategory;
-      const matchesSearch =
-        !needle ||
-        `${item.name} ${item.ingredients ?? ""}`.toLowerCase().includes(needle);
-      return matchesCategory && matchesSearch;
-    });
-  }, [activeCategory, categories, menuItems, search, takeawayMode]);
-  const displayedItems = useMemo(
-    () => applyPendingQuantityDeltas(items, pendingQuantityDeltas),
-    [items, pendingQuantityDeltas],
-  );
-  const menuItemQuantities = useMemo(
-    () => aggregateMenuItemQuantities(displayedItems),
-    [displayedItems],
-  );
-  const displayedProductCount = displayedItems.reduce(
-    (sum, item) => sum + item.quantity,
-    0,
-  );
-
-  if (serviceState === "error") {
-    return (
-      <section className="empty-card" role="alert">
-        <h1>Stato del servizio non disponibile</h1>
-        <p>{serviceError || "Riprova quando la connessione dati è affidabile."}</p>
-      </section>
-    );
+  function changeNote(key: string, value: string, original: string) {
+    const next = { ...noteDraftsRef.current, [key]: { value, original: noteDraftsRef.current[key]?.original ?? original } };
+    noteDraftsRef.current = next; setNoteDrafts(next);
   }
-  if (loading || status === "checking" || serviceLoading) {
-    return <div className="loader" aria-label="Caricamento comanda" />;
-  }
-  if (dataState === "error") {
-    return (
-      <section className="empty-card" role="alert">
-        <h1>Dati comanda non disponibili</h1>
-        <p>{loadError}</p>
-        <button className="button button-primary" onClick={() => void loadBase(false)}>
-          Riprova
-        </button>
-      </section>
-    );
-  }
-  if (!order || (!takeawayMode && !table)) {
-    const serviceMessage = !service
-      ? "La cassa deve iniziare il servizio prima di aprire il tavolo."
-      : isPreviousService(service)
-        ? "Il servizio precedente deve essere chiuso dalla cassa prima di creare nuove comande."
-        : null;
-    return (
-      <section className="empty-card">
-        <h1>
-          {serviceMessage
-            ? "Nessun servizio operativo"
-            : canWrite
-              ? takeawayMode
-                ? "Asporto non disponibile"
-                : "Tavolo non disponibile"
-              : "Comanda non disponibile offline"}
-        </h1>
-        <p>{serviceMessage ?? (!canWrite ? blockReason : null)}</p>
-        <Link
-          className="button button-primary"
-          href={takeawayMode ? "/asporti" : "/staff/tables"}
-        >
-          {takeawayMode ? "Torna agli asporti" : "Torna ai tavoli"}
-        </Link>
-      </section>
-    );
-  }
+  const commitNotes = useCallback((onlyKey?: string) => {
+    const next = { ...noteDraftsRef.current };
+    let succeeded = true;
+    for (const [key, draft] of Object.entries(next)) {
+      if (onlyKey && key !== onlyKey) continue;
+      if (draft.value !== draft.original) {
+        const accepted = enqueue(key === "general" ? {
+          type: "details", general_notes: draft.value, expected_general_notes: draft.original,
+        } : { type: "note", item_id: key, notes: draft.value, expected_notes: draft.original, new_item_id: crypto.randomUUID() }, "Nota");
+        if (!accepted) { succeeded = false; continue; }
+      }
+      delete next[key];
+    }
+    noteDraftsRef.current = next; setNoteDrafts(next);
+    return succeeded;
+  }, [enqueue]);
 
-  const serviceOperational = Boolean(service && !isPreviousService(service));
-  const operationsEnabled = canWrite && serviceOperational;
-  const operationalBlockReason = !canWrite
-    ? blockReason ??
-      serviceError ??
-      "Dati non aggiornati. Le modifiche restano bloccate."
-    : !service
-      ? "Nessun servizio aperto."
-      : !serviceOperational
-        ? "Il servizio precedente deve essere chiuso dalla cassa."
-        : null;
-  const editable = canEditOrder(order.status);
-  const writeEnabled =
-    editable &&
-    operationsEnabled &&
-    saving !== "saving" &&
-    !submitting &&
-    quantityPhase === "idle";
-  const quantityWriteEnabled =
-    editable &&
-    operationsEnabled &&
-    !submitting &&
-    quantityPhase !== "flushing" &&
-    (saving !== "saving" || quantityPhase === "collecting");
-  const canVerifySubmission =
-    profile.role === "waiter" &&
-    order.status === "pending_cashier" &&
-    isWithinMinutes(order.sent_to_cashier_at, 15);
-  const submissionIssue =
-    !operationsEnabled && order.status === "draft"
-      ? operationalBlockReason
-      : getOrderSubmissionIssue({
-          status: order.status,
-          itemCount: items.length,
-          saving,
-        });
-  const updateReady =
-    canSendOrderUpdate(order.status) && updatePrintStatus === "pending";
-  const submissionType: Extract<PrintJobType, "new_order" | "order_update"> | null =
-    order.status === "draft"
-      ? "new_order"
-      : updateReady
-        ? "order_update"
-        : canVerifySubmission
-          ? "new_order"
-          : null;
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (queue.getSnapshot().pending.length || Object.keys(noteDraftsRef.current).length || submittingRef.current) {
+        event.preventDefault(); event.returnValue = "";
+      }
+    };
+    const hidden = () => { if (document.visibilityState === "hidden") { commitNotes(); void queue.flush(); } };
+    const navigate = (event: MouseEvent) => {
+      const link = (event.target as Element | null)?.closest<HTMLAnchorElement>("a[href]");
+      if (!link || link.origin !== window.location.origin || link.target === "_blank" || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
+      if (!queue.getSnapshot().pending.length && !Object.keys(noteDraftsRef.current).length && !submittingRef.current) return;
+      if (link.pathname === window.location.pathname && link.hash) return;
+      event.preventDefault(); event.stopPropagation();
+      if (submittingRef.current) { setMessage("Invio in corso. Attendi la conferma prima di uscire."); return; }
+      if (commitNotes()) void queue.flush().then((saved) => { if (saved) router.push(link.pathname + link.search + link.hash); });
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    document.addEventListener("visibilitychange", hidden);
+    document.addEventListener("click", navigate, true);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      document.removeEventListener("visibilitychange", hidden);
+      document.removeEventListener("click", navigate, true);
+    };
+  }, [commitNotes, queue, router]);
 
-  return (
-    <>
-      {dataState === "stale" && (
-        <section className="connection-action-hint" role="alert">
-          <strong>Snapshot non aggiornato.</strong> {loadError}
-          <button className="text-button" onClick={() => void loadOrder()}>
-            Riprova
-          </button>
-        </section>
-      )}
-      <section className="order-heading">
-        <div>
-          <Link
-            className="back-link"
-            href={order.order_type === "takeaway" ? "/asporti" : "/staff/tables"}
-          >
-            {order.order_type === "takeaway" ? "← Asporti" : "← Tavoli"}
-          </Link>
-          <p className="eyebrow">Comanda #{order.order_number}</p>
-          <h1>{getOrderShortLabel({ ...order, table: table ?? undefined })}</h1>
-          {order.order_type === "takeaway" && order.takeaway_pickup_at && (
-            <p className="takeaway-pickup">
-              Ritiro alle {new Intl.DateTimeFormat("it-IT", {
-                hour: "2-digit",
-                minute: "2-digit",
-              }).format(new Date(order.takeaway_pickup_at))}
-            </p>
-          )}
-          {service && (
-            <p className="service-context">{formatServiceLabel(service)}</p>
-          )}
-        </div>
-        <div className="order-live-status">
-          <span className={`save-state save-${saving}`}>
-            {!operationsEnabled
-              ? "Modifiche bloccate"
-              : saving === "saved"
-                ? "Salvato"
-                : saving === "saving"
-                  ? "Salvataggio…"
-                  : "Non salvato"}
-          </span>
-          <span className="status-label">{ORDER_STATUS_LABELS[order.status]}</span>
-        </div>
-      </section>
+  useEffect(() => {
+    if (quantityPicker) pickerRef.current?.showModal();
+    else pickerRef.current?.close();
+  }, [quantityPicker]);
 
-      {presence.length > 0 && (
-        <p className="presence">
-          {order.order_type === "takeaway" ? "Asporto" : "Tavolo"} aperto da {presence.join(", ")}
-        </p>
-      )}
-      {externalUpdate && (
-        <button className="external-update" onClick={() => setExternalUpdate(false)}>
-          Ordine aggiornato da un altro utente · Chiudi
-        </button>
-      )}
-      {mutationError && (
-        <button className="external-update error-update" onClick={() => setMutationError("")}>
-          {mutationError} · Chiudi
-        </button>
-      )}
-      {!operationsEnabled && (
-        <p className="connection-action-hint" role="status">
-          {operationalBlockReason} I comandi di modifica restano disabilitati.
-        </p>
-      )}
+  const displayedItems = useMemo(() => aggregateIdenticalOrderItems(items), [items]);
+  const menuItemQuantities = useMemo(() => aggregateMenuItemQuantities(items), [items]);
+  const productCount = items.reduce((sum, item) => sum + item.quantity, 0);
+  const selectableCategories = categories.filter((category) => category.slug !== "extra" && !(takeawayMode && category.slug === "all-you-can-eat"));
+  const visibleProducts = menuItems.filter((item) => {
+    if (!selectableCategories.some((category) => category.id === item.category_id)) return false;
+    const needle = search.trim().toLocaleLowerCase("it");
+    return needle ? `${item.name} ${item.ingredients ?? ""}`.toLocaleLowerCase("it").includes(needle) : item.category_id === activeCategory;
+  });
 
-      <div className="order-layout">
-        <section className="product-picker">
-          {order.order_type === "dine_in" && (
-            <div className="covers-row covers-row-menu">
-              <span>Coperti</span>
-              <button
-                type="button"
-                className="view-order-button"
-                aria-label={`Vai alla comanda, ${displayedProductCount} prodotti`}
-                onClick={() => {
-                  setCoverPickerOpen(false);
-                  orderPanelRef.current?.scrollIntoView({
-                    behavior: "smooth",
-                    block: "start",
-                  });
-                  orderPanelRef.current?.focus({ preventScroll: true });
-                }}
-              >
-                <span aria-hidden="true">↓</span>
-                <span className="view-order-label">Vedi ordine</span>
-                <strong>{displayedProductCount}</strong>
-              </button>
-              <div className="covers-control">
-                <div className="stepper">
-                  <button
-                    aria-label="Diminuisci coperti"
-                    disabled={!writeEnabled || order.cover_count === 0}
-                    onClick={() => {
-                      setCoverPickerOpen(false);
-                      void saveDetails(order.cover_count - 1);
-                    }}
-                  >
-                    −
-                  </button>
-                  <button
-                    type="button"
-                    className="covers-count-button"
-                    aria-label={`Scegli numero di coperti, attualmente ${order.cover_count}`}
-                    aria-expanded={coverPickerOpen}
-                    disabled={!writeEnabled}
-                    onClick={() => {
-                      setCoverDraft(String(order.cover_count));
-                      setCoverPickerOpen((open) => !open);
-                    }}
-                  >
-                    {order.cover_count}
-                  </button>
-                  <button
-                    aria-label="Aumenta coperti"
-                    disabled={!writeEnabled || order.cover_count === MAX_COVER_COUNT}
-                    onClick={() => {
-                      setCoverPickerOpen(false);
-                      void saveDetails(order.cover_count + 1);
-                    }}
-                  >
-                    +
-                  </button>
-                </div>
-                {coverPickerOpen && (
-                  <div
-                    className="covers-number-panel"
-                    role="group"
-                    aria-label="Inserisci il numero di coperti"
-                    onKeyDown={(event) => {
-                      if (event.key === "Escape") setCoverPickerOpen(false);
-                    }}
-                  >
-                    <label htmlFor="cover-count-input">Numero di coperti</label>
-                    <input
-                      id="cover-count-input"
-                      aria-label="Numero di coperti"
-                      type="number"
-                      inputMode="numeric"
-                      min="0"
-                      max={MAX_COVER_COUNT}
-                      step="1"
-                      value={coverDraft}
-                      autoFocus
-                      onFocus={(event) => event.currentTarget.select()}
-                      onChange={(event) => setCoverDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          void confirmCoverSelection();
-                        }
-                      }}
-                    />
-                    <small>Inserisci un numero da 0 a {MAX_COVER_COUNT}.</small>
-                    <div className="covers-number-actions">
-                      <button type="button" onClick={() => setCoverPickerOpen(false)}>
-                        Annulla
-                      </button>
-                      <button
-                        type="button"
-                        className="button-primary"
-                        disabled={!writeEnabled}
-                        onClick={() => void confirmCoverSelection()}
-                      >
-                        Conferma
-                      </button>
-                    </div>
-                  </div>
-                )}
+  if (loading || serviceLoading) return <div className="loader" aria-label="Caricamento comanda" />;
+  if (!order) return <section className="empty-card">
+    <h1>{loadError ? "Comanda non disponibile" : "Nessuna comanda aperta"}</h1>
+    <p>{catalogueError || loadError || serviceError || (!serviceOperational ? "La cassa deve aprire il servizio di oggi." : "Apri la comanda per iniziare.")}</p>
+    <button className="button button-primary" onClick={() => void loadCatalogue().then((loaded) => loaded && loadOrder(connectionCanWrite && serviceOperational))}>Riprova</button>
+    <Link className="button" href={takeawayMode ? "/asporti" : "/staff/tables"}>Torna {takeawayMode ? "agli asporti" : "ai tavoli"}</Link>
+  </section>;
+
+  const canVerifySubmission = order.status === "pending_cashier" && getInitialPrintDecision(profile, order) === "allowed";
+  const canSubmit = writeEnabled && productCount > 0 && (order.status === "draft" || updatePrintStatus === "pending" || canVerifySubmission);
+  const block = !connectionCanWrite ? blockReason : serviceState !== "ready" ? serviceError : !serviceOperational ? "La cassa deve aprire il servizio di oggi." : catalogueError || loadError;
+  const label = getOrderShortLabel({ ...order, table: table ?? undefined });
+
+  return <>
+    <section className="order-heading">
+      <div>
+        <Link className="back-link" href={takeawayMode ? "/asporti" : "/staff/tables"}>← {takeawayMode ? "Asporti" : "Tavoli"}</Link>
+        <p className="eyebrow">Comanda #{order.order_number}</p><h1>{label}</h1>
+        {takeawayMode && order.takeaway_pickup_at && <p className="takeaway-pickup">Ritiro alle {new Intl.DateTimeFormat("it-IT", { hour: "2-digit", minute: "2-digit" }).format(new Date(order.takeaway_pickup_at))}</p>}
+        {service && <p className="service-context">{formatServiceLabel(service)}</p>}
+      </div>
+      <div className="order-live-status" aria-live="polite">
+        <span className={`save-state save-${saving}`}>{queueState.error ? "Da verificare" : pendingCount ? `Salvataggio… (${pendingCount})` : "Salvato"}</span>
+        <span className="status-label">{ORDER_STATUS_LABELS[order.status]}</span>
+      </div>
+    </section>
+    {presence.length > 0 && <p className="presence">Anche {presence.join(", ")} sta consultando la comanda.</p>}
+    {externalUpdate && <button className="external-update" onClick={() => setExternalUpdate(false)}>Comanda aggiornata da un altro operatore · Chiudi</button>}
+    {block && <section className="connection-action-hint" role="alert">{block} <button className="text-button" onClick={() => void verify().then(() => loadCatalogue()).then((loaded) => loaded && loadOrder())}>Verifica connessione e aggiorna</button></section>}
+    {queueState.error && <section className="order-save-error" role="alert">
+      <strong>Salvataggio da verificare</strong><p>{queueState.error}</p>
+      <p>{pendingCount} modifiche restano in attesa. I valori mostrati non sono ancora confermati.</p>
+      <button className="button button-primary" onClick={() => void verify().then((online) => online && queue.retry())}>Riprova salvataggio</button>
+      <button className="button" onClick={() => {
+        if (window.confirm("Rileggere la comanda dal server? Le modifiche ancora in attesa verranno abbandonate; quelle già registrate resteranno nell’ordine.")) void loadOrder(false, true);
+      }}>Rileggi e abbandona modifiche in attesa</button>
+    </section>}
+    {message && <p className="connection-action-hint" role="status">{message}</p>}
+
+    <div className={`order-layout fast-order-layout ${summaryOpen ? "summary-is-open" : ""}`}>
+      <section className="product-picker">
+        <div className="order-catalogue-tools">
+          <div className="covers-row covers-row-menu">
+            {order.order_type === "dine_in" ? <>
+              <span>Coperti</span><div className="stepper">
+                <button aria-label="Diminuisci coperti" disabled={!writeEnabled || order.cover_count <= 0} onClick={() => enqueue({ type: "details", cover_count: queue.getSnapshot().visible.order!.cover_count - 1 }, "Coperti")}>−</button>
+                <button className="covers-count-button" aria-label={`Scegli coperti, ${order.cover_count}`} disabled={!writeEnabled} onClick={() => openQuantity({ covers: true }, order.cover_count)}>{order.cover_count}</button>
+                <button aria-label="Aumenta coperti" disabled={!writeEnabled || order.cover_count >= 99} onClick={() => enqueue({ type: "details", cover_count: queue.getSnapshot().visible.order!.cover_count + 1 }, "Coperti")}>+</button>
               </div>
-            </div>
-          )}
-          <label className="compact-search product-search">
-            <span>⌕</span>
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Cerca prodotto" />
-          </label>
-          {!search && (
-            <nav className="category-tabs" aria-label="Categorie prodotti">
-              {categories.filter((category) =>
-                category.slug !== "extra" &&
-                !(takeawayMode && category.slug === "all-you-can-eat")
-              ).map((category) => (
-                <button
-                  className={activeCategory === category.id ? "active" : ""}
-                  key={category.id}
-                  onClick={() => setActiveCategory(category.id)}
-                >
-                  {category.name}
-                </button>
-              ))}
-            </nav>
-          )}
-          <div className="product-grid">
-            {visibleProducts.map((item) => (
-              <button
-                className="product-button"
-                disabled={!writeEnabled || !item.available}
-                title={!operationsEnabled ? operationalBlockReason ?? undefined : undefined}
-                key={item.id}
-                onClick={() =>
-                  void mutate("order_item_add_failed", async () => {
-                    const { error } = await createClient().rpc("add_order_item", {
-                      p_order_id: order.id,
-                      p_menu_item_id: item.id,
-                      p_notes: "",
-                    });
-                    if (error) throw error;
-                  })
-                }
-              >
-                {(menuItemQuantities[item.id] ?? 0) > 0 && (
-                  <span
-                    className="product-quantity-badge"
-                    aria-label={`${menuItemQuantities[item.id]} inseriti`}
-                  >
-                    {menuItemQuantities[item.id]}
-                  </span>
-                )}
-                <span>{item.name}</span>
-                <strong>{item.available ? formatCurrency(item.price) : "Esaurito"}</strong>
-                {item.ingredients && <small>{item.ingredients}</small>}
-              </button>
-            ))}
+            </> : <strong>Prodotti da asporto</strong>}
           </div>
-        </section>
+          <label className="compact-search product-search"><span aria-hidden="true">⌕</span><input aria-label="Cerca prodotto" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Cerca prodotto" />{search && <button className="text-button" aria-label="Cancella ricerca" onClick={() => setSearch("")}>×</button>}</label>
+          {!search.trim() && <nav className="category-tabs" aria-label="Categorie prodotti">{selectableCategories.map((category) => <button aria-pressed={activeCategory === category.id} className={activeCategory === category.id ? "active" : ""} key={category.id} onClick={() => setActiveCategory(category.id)}>{category.name}</button>)}</nav>}
+        </div>
+        <div className="product-grid">
+          {visibleProducts.map((product) => <div className="order-product-tile" key={product.id}>
+            <button className="product-button" disabled={!writeEnabled || !product.available} onClick={() => addProduct(product, 1)} aria-label={`Aggiungi ${product.name}`}>
+              {(menuItemQuantities[product.id] ?? 0) > 0 && <span className="product-quantity-badge" aria-label={`${menuItemQuantities[product.id]} inseriti`}>{menuItemQuantities[product.id]}</span>}
+              <span>{product.name}</span><strong>{product.available ? formatCurrency(product.price) : "Esaurito"}</strong>
+              {product.ingredients && <small>{product.ingredients}</small>}
+            </button>
+            <button className="product-multiple" disabled={!writeEnabled || !product.available} aria-label={`Scegli quantità di ${product.name}`} onClick={() => openQuantity({ product }, 1)}>Quantità…</button>
+          </div>)}
+        </div>
+        {!visibleProducts.length && <div className="empty-line"><p>{search ? "Nessun prodotto trovato." : "Nessun prodotto in questa categoria."}</p>{search && <button className="button" onClick={() => setSearch("")}>Cancella ricerca</button>}</div>}
+      </section>
 
-        <section
-          className="order-panel"
-          id="table-order-summary"
-          ref={orderPanelRef}
-          tabIndex={-1}
-        >
-          <div className="panel-title">
-            <div><p className="eyebrow">Ordine</p><h2>Comanda</h2></div>
-            <strong>{displayedProductCount} prodotti</strong>
-          </div>
+      <section className="order-panel" ref={orderPanelRef} tabIndex={-1} id="table-order-summary" aria-label="Riepilogo comanda">
+        <div className="panel-title"><div><p className="eyebrow">Ordine</p><h2>Comanda</h2></div><strong>{productCount} prodotti</strong><button className="text-button order-back-to-menu" onClick={() => setSummaryOpen(false)}>← Menu</button></div>
+        <div className="order-lines">
+          {!displayedItems.length && <p className="empty-line">Tocca un prodotto per iniziare.</p>}
+          {displayedItems.map((item) => <article className={`order-line ${item.extras.length || item.notes ? "has-variant" : ""}`} key={item.id}>
+            <div className="line-main"><div><strong>{item.item_name_snapshot}</strong><small>{formatCurrency(item.item_price_snapshot)} cad.</small></div><strong>{formatCurrency(item.line_total + item.extras.reduce((sum, extra) => sum + extra.total, 0))}</strong></div>
+            {item.notes && <p className="order-variant-note">{item.notes}</p>}
+            {item.extras.length > 0 && <div className="order-variant-extras">{item.extras.map((extra) => <span key={extra.id}>+ {extra.extra_name_snapshot}{extra.quantity / item.quantity !== 1 ? ` (${extra.quantity / item.quantity} per prodotto)` : ""}</span>)}<small>Gli extra sono inclusi in ogni prodotto di questa riga.</small></div>}
+            <div className="line-actions"><div className="stepper small">
+              <button aria-label={`Diminuisci ${item.item_name_snapshot}`} disabled={!writeEnabled} onClick={() => changeQuantity(item, -1)}>−</button>
+              <button className="line-count-button" aria-label={`Modifica quantità ${item.item_name_snapshot}, ${item.quantity}`} disabled={!writeEnabled} onClick={() => openQuantity({ item }, item.quantity)}>{item.quantity}</button>
+              <button aria-label={`Aumenta ${item.item_name_snapshot}`} disabled={!writeEnabled || item.quantity >= 999} onClick={() => changeQuantity(item, 1)}>+</button>
+            </div><button className="danger-link" disabled={!writeEnabled} onClick={() => enqueue({ type: "remove", item_ids: groupIds(item) }, "Rimuovi riga")}>Rimuovi {item.quantity > 1 ? `tutti (${item.quantity})` : ""}</button></div>
+            <details className="order-customization"><summary>Nota / extra{item.quantity > 1 ? " su un prodotto" : ""}</summary>
+              {item.quantity > 1 && <p className="variant-help">La modifica separa un prodotto dagli altri. Poi usa + per aumentare la nuova variante.</p>}
+              <label className="order-note-label">Nota sul prodotto<input className="line-note" aria-label={`Nota ${item.item_name_snapshot}`} value={noteDrafts[item.id]?.value ?? item.notes} maxLength={300} disabled={!writeEnabled} placeholder="Es. senza mozzarella…" onChange={(event) => changeNote(item.id, event.target.value, item.notes)} onBlur={() => commitNotes(item.id)} /></label>
+              {item.extras.map((extra) => <div className="extra-line" key={extra.id}><span>+ {extra.extra_name_snapshot} · {formatCurrency(extra.total / item.quantity)} cad.</span><button aria-label={`Rimuovi extra ${extra.extra_name_snapshot} da un prodotto`} disabled={!writeEnabled || extra.id.includes(":")} onClick={() => enqueue({ type: "remove_extra", item_id: item.id, extra_id: extra.id, new_item_id: crypto.randomUUID() }, "Rimuovi extra")}>×</button></div>)}
+              {extras.length > 0 && <select className="extra-select" aria-label={`Aggiungi extra a ${item.item_name_snapshot}`} value="" disabled={!writeEnabled} onChange={(event) => {
+                const extra = extras.find((entry) => entry.id === event.target.value);
+                if (extra) enqueue({ type: "extra", item_id: item.id, extra_id: extra.id, new_item_id: crypto.randomUUID(), extra }, "Aggiungi extra");
+              }}><option value="">+ Aggiungi extra</option>{extras.filter((extra) => extra.available).map((extra) => <option key={extra.id} value={extra.id}>{extra.name} · {formatCurrency(extra.price)}</option>)}</select>}
+            </details>
+          </article>)}
+        </div>
+        <label className="general-note">Nota generale<textarea value={noteDrafts.general?.value ?? order.general_notes} maxLength={500} disabled={!writeEnabled} placeholder="Es. portare tutto insieme…" onChange={(event) => changeNote("general", event.target.value, order.general_notes)} onBlur={() => commitNotes("general")} /></label>
+        <div className="totals"><p><span>Subtotale</span><strong>{formatCurrency(order.subtotal)}</strong></p>{order.order_type === "dine_in" && <p><span>Coperto ({order.cover_count} × {formatCurrency(order.cover_price_snapshot)})</span><strong>{formatCurrency(order.cover_total)}</strong></p>}<p className="grand-total"><span>Totale{pendingCount ? " provvisorio" : ""}</span><strong>{formatCurrency(order.total)}</strong></p></div>
+      </section>
+    </div>
 
-          <div className="order-lines">
-            {displayedItems.length === 0 && <p className="empty-line">Tocca un prodotto per iniziare.</p>}
-            {displayedItems.map((item) => (
-              <article className="order-line" key={item.id}>
-                <div className="line-main">
-                  <div><strong>{item.item_name_snapshot}</strong><small>{formatCurrency(item.item_price_snapshot)} cad.</small></div>
-                  <strong>{formatCurrency(item.line_total + item.extras.reduce((sum, extra) => sum + extra.total, 0))}</strong>
-                </div>
-                <div className="line-actions">
-                  <div className="stepper small">
-                    <button disabled={!quantityWriteEnabled} onClick={() => queueQuantity(item, -1)}>−</button>
-                    <strong>{item.quantity}</strong>
-                    <button disabled={!quantityWriteEnabled} onClick={() => queueQuantity(item, 1)}>+</button>
-                  </div>
-                  <button className="danger-link" disabled={!writeEnabled} onClick={() => void remove(item.id)}>Rimuovi</button>
-                </div>
-                <div className="quick-notes">
-                  {QUICK_NOTES.map((note) => (
-                    <button
-                      disabled={!writeEnabled}
-                      key={note}
-                      onClick={() => void saveItemNote(item, item.notes ? `${item.notes}, ${note}` : note)}
-                    >
-                      {note}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  className="line-note"
-                  defaultValue={item.notes}
-                  maxLength={300}
-                  disabled={!writeEnabled}
-                  placeholder="Nota sulla riga…"
-                  onBlur={(event) => {
-                    if (event.target.value !== item.notes) void saveItemNote(item, event.target.value);
-                  }}
-                />
-                {item.extras.map((extra) => (
-                  <div className="extra-line" key={extra.id}>
-                    <span>↳ {extra.quantity}× {extra.extra_name_snapshot} · {formatCurrency(extra.total)}</span>
-                    <button
-                      type="button"
-                      aria-label={`Rimuovi extra ${extra.extra_name_snapshot}`}
-                      disabled={!writeEnabled}
-                      onClick={() => void removeExtra(extra.id)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-                {editable && extras.length > 0 && (
-                  <select
-                    className="extra-select"
-                    defaultValue=""
-                    disabled={!writeEnabled}
-                    onChange={(event) => {
-                      const extraId = event.target.value;
-                      event.target.value = "";
-                      if (extraId) void addExtra(item.id, extraId);
-                    }}
-                  >
-                    <option value="">+ Aggiungi extra</option>
-                    {extras.filter((extra) => extra.available).map((extra) => (
-                      <option value={extra.id} key={extra.id}>{extra.name} · {formatCurrency(extra.price)}</option>
-                    ))}
-                  </select>
-                )}
-              </article>
-            ))}
-          </div>
+    <div className="order-bottom-bar fast-order-bottom-bar">
+      <button className="order-summary-toggle" aria-expanded={summaryOpen} aria-controls="table-order-summary" onClick={() => {
+        setSummaryOpen((value) => !value);
+        if (window.matchMedia("(min-width: 901px)").matches) { orderPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); orderPanelRef.current?.focus({ preventScroll: true }); }
+      }}><span>{summaryOpen ? "← Menu" : `Vedi ordine · ${productCount} prodotti`}</span><strong>{formatCurrency(order.total)}</strong>{pendingCount > 0 && <small>Salvataggio…</small>}</button>
+      <button className="button button-primary button-large" disabled={!canSubmit} onClick={() => void submitOrder()}>{submitting ? "Invio…" : order.status === "draft" ? "Invia alla cassa" : updatePrintStatus === "pending" ? "Invia aggiornamento" : order.status === "pending_cashier" ? "Verifica invio e stampa" : updatePrintStatus === "printing" ? "Aggiornamento in stampa" : updatePrintStatus === "failed" ? "Stampa da verificare in cassa" : "Comanda aggiornata"}</button>
+    </div>
 
-          <label className="general-note">
-            Nota generale
-            <textarea
-              maxLength={500}
-              defaultValue={order.general_notes}
-              disabled={!writeEnabled}
-              placeholder="Es. portare tutto insieme…"
-              onBlur={(event) => {
-                if (event.target.value !== order.general_notes) {
-                  void saveDetails(order.cover_count, event.target.value);
-                }
-              }}
-            />
-          </label>
+    <dialog className="order-quantity-dialog" ref={pickerRef} onCancel={() => closeQuantity()} onClose={() => { setQuantityPicker(null); returnFocusRef.current?.focus(); }}>
+      {quantityPicker && <form onSubmit={(event) => { event.preventDefault(); confirmQuantity(); }}>
+        <h2>{quantityPicker.covers ? "Coperti" : quantityPicker.product?.name ?? quantityPicker.item?.item_name_snapshot}</h2>
+        <label>Quantità<input aria-label="Quantità" autoFocus type="number" inputMode="numeric" min={quantityPicker.covers ? 0 : 1} max={quantityPicker.covers ? 99 : 999} step="1" value={quantityDraft} onFocus={(event) => event.target.select()} onChange={(event) => setQuantityDraft(event.target.value)} required /></label>
+        {quantityPicker.product && <p>{formatCurrency(quantityPicker.product.price * (Number(quantityDraft) || 0))}</p>}
+        <div className="quantity-shortcuts">{[1, 2, 3, 5, 10].map((quantity) => <button type="button" key={quantity} onClick={() => setQuantityDraft(String(quantity))}>{quantity}</button>)}</div>
+        <div className="modal-actions"><button className="button" type="button" onClick={closeQuantity}>Annulla</button><button className="button button-primary" disabled={!writeEnabled}>{quantityPicker.product ? `Aggiungi ${quantityDraft || ""}` : "Conferma"}</button></div>
+      </form>}
+    </dialog>
+  </>;
 
-          <div className="totals">
-            <p><span>Subtotale</span><strong>{formatCurrency(order.subtotal)}</strong></p>
-            {order.order_type === "dine_in" && (
-              <p><span>Coperto ({order.cover_count} × {formatCurrency(order.cover_price_snapshot)})</span><strong>{formatCurrency(order.cover_total)}</strong></p>
-            )}
-            <p className="grand-total"><span>Totale</span><strong>{formatCurrency(order.total)}</strong></p>
-          </div>
-        </section>
-      </div>
-
-      <div className="order-bottom-bar">
-        <div><span>Totale</span><strong>{formatCurrency(order.total)}</strong></div>
-        {order.status === "draft" && submissionIssue && (
-          <p className="order-send-hint" id="order-send-hint" role="status">
-            {submissionIssue}
-          </p>
-        )}
-        <button
-          className="button button-primary button-large"
-          aria-describedby={submissionIssue ? "order-send-hint" : undefined}
-          disabled={
-            submitting ||
-            saving === "saving" ||
-            !operationsEnabled ||
-            (order.status === "draft" ? submissionIssue !== null : !submissionType)
-          }
-          onClick={() => {
-            if (submissionType) void submitOrder(submissionType);
-          }}
-        >
-          {submitting
-            ? "Invio..."
-            : getSubmissionLabel({
-                orderStatus: order.status,
-                updatePrintStatus,
-                canVerifySubmission,
-              })}
-        </button>
-      </div>
-    </>
-  );
-
-  async function confirmCoverSelection() {
-    const nextCoverCount = Number(coverDraft);
-    if (
-      coverDraft.trim() === "" ||
-      !Number.isInteger(nextCoverCount) ||
-      nextCoverCount < 0 ||
-      nextCoverCount > MAX_COVER_COUNT
-    ) {
-      setMutationError(`Inserisci un numero di coperti da 0 a ${MAX_COVER_COUNT}.`);
-      return;
-    }
-    if (nextCoverCount === order!.cover_count) {
-      setCoverPickerOpen(false);
-      return;
-    }
-    const saved = await saveDetails(nextCoverCount);
-    if (saved) setCoverPickerOpen(false);
+  function groupIds(item: OrderItem) { return getIdenticalOrderItemIds(queue.getSnapshot().visible.items, item.id); }
+  function addProduct(product: MenuItem, quantity: number) {
+    enqueue({ type: "add", item_id: crypto.randomUUID(), menu_item_id: product.id, quantity, product }, `Aggiungi ${quantity} ${product.name}`);
   }
-
-  async function saveDetails(covers: number, notes = order!.general_notes) {
-    if (notes.length > 500) {
-      setMutationError("La nota ordine non può superare 500 caratteri.");
-      return false;
-    }
-    return mutate("order_details_update_failed", async () => {
-      const { error } = await createClient().rpc("set_order_details", {
-        p_order_id: order!.id,
-        p_cover_count: covers,
-        p_general_notes: notes,
-        p_expected_version: order!.version,
-      });
-      if (error) throw error;
-    });
+  function changeQuantity(item: OrderItem, delta: number) {
+    enqueue({ type: "quantity", item_ids: groupIds(item), delta }, `Quantità ${item.item_name_snapshot}`);
   }
-
-  function queueQuantity(item: OrderItem, delta: number) {
-    if (
-      !operationsEnabled ||
-      !editable ||
-      submittingRef.current ||
-      mutationInFlight.current ||
-      quantityPhaseRef.current === "flushing"
-    ) {
-      setMutationError("Salvataggio già in corso. Attendi un momento e ripeti il comando.");
-      return;
-    }
-    const nextPending = { ...pendingQuantityDeltasRef.current };
-    const nextDelta = (nextPending[item.id] ?? 0) + delta;
-    const baseQuantity =
-      aggregateIdenticalOrderItems(itemsRef.current)
-        .find((currentItem) => currentItem.id === item.id)?.quantity ?? 0;
-    if (baseQuantity + nextDelta < 0) return;
-
-    if (nextDelta === 0) delete nextPending[item.id];
-    else nextPending[item.id] = nextDelta;
-    pendingQuantityDeltasRef.current = nextPending;
-    setPendingQuantityDeltas(nextPending);
-    setMutationError("");
-
-    if (quantityFlushTimer.current !== null) {
-      window.clearTimeout(quantityFlushTimer.current);
-      quantityFlushTimer.current = null;
-    }
-    if (Object.keys(nextPending).length === 0) {
-      quantityPhaseRef.current = "idle";
-      setQuantityPhase("idle");
-      setSaving("saved");
-      return;
-    }
-
-    quantityPhaseRef.current = "collecting";
-    setQuantityPhase("collecting");
-    setSaving("saving");
-    quantityFlushTimer.current = window.setTimeout(() => {
-      quantityFlushTimer.current = null;
-      void flushQuantityChanges();
-    }, QUANTITY_BATCH_DELAY_MS);
+  function openQuantity(target: NonNullable<typeof quantityPicker>, quantity: number) {
+    returnFocusRef.current = document.activeElement as HTMLElement;
+    setQuantityDraft(String(quantity)); setQuantityPicker(target);
   }
-
-  async function remove(itemId: string) {
-    await mutate("order_item_remove_failed", async () => {
-      const { error } = await createClient().rpc("remove_order_item", { p_item_id: itemId });
-      if (error) throw error;
-    });
-  }
-
-  async function saveItemNote(item: OrderItem, notes: string) {
-    if (notes.length > 300) {
-      setMutationError("La nota riga non può superare 300 caratteri.");
-      return;
+  function closeQuantity() { pickerRef.current?.close(); setQuantityPicker(null); }
+  function confirmQuantity() {
+    const quantity = Number(quantityDraft);
+    if (!quantityPicker || !Number.isInteger(quantity) || quantity < (quantityPicker.covers ? 0 : 1) || quantity > (quantityPicker.covers ? 99 : 999)) return;
+    if (quantityPicker.product) addProduct(quantityPicker.product, quantity);
+    if (quantityPicker.covers) enqueue({ type: "details", cover_count: quantity }, "Coperti");
+    if (quantityPicker.item) {
+      const current = aggregateIdenticalOrderItems(queue.getSnapshot().visible.items).find((item) => item.id === quantityPicker.item!.id);
+      if (!current) { setMessage("La riga è cambiata. Scegli di nuovo la quantità."); closeQuantity(); return; }
+      if (quantity !== current.quantity) changeQuantity(current, quantity - current.quantity);
     }
-    await mutate("order_item_note_update_failed", async () => {
-      const { error } = await createClient().rpc("set_order_item_notes", {
-        p_item_id: item.id,
-        p_notes: notes,
-        p_expected_version: item.version,
-      });
-      if (error) throw error;
-    });
+    closeQuantity();
   }
-
-  async function addExtra(itemId: string, extraId: string) {
-    await mutate("order_item_extra_add_failed", async () => {
-      const { error } = await createClient().rpc("add_order_item_extra", {
-        p_item_id: itemId,
-        p_menu_extra_id: extraId,
-      });
-      if (error) throw error;
-    });
-  }
-
-  async function removeExtra(extraId: string) {
-    await mutate("order_item_extra_remove_failed", async () => {
-      const { error } = await createClient().rpc("remove_order_item_extra", {
-        p_extra_id: extraId,
-      });
-      if (error) throw error;
-    });
-  }
-
-  async function submitOrder(
-    type: Extract<PrintJobType, "new_order" | "order_update">,
-  ) {
-    if (submittingRef.current) return;
-    if (
-      mutationInFlight.current ||
-      quantityPhaseRef.current !== "idle"
-    ) {
-      setMutationError("Attendi il salvataggio in corso prima di inviare la comanda.");
-      return;
-    }
-    if (!operationsEnabled) {
-      setSaving("error");
-      setMutationError(
-        operationalBlockReason ?? "Comanda non inviata.",
-      );
-      return;
-    }
-
-    submittingRef.current = true;
-    setSubmitting(true);
-    setSaving("saving");
-    setMutationError("");
-    selfUpdate.current = true;
-
+  async function submitOrder() {
+    if (submittingRef.current || !operationsEnabled || !commitNotes()) return;
+    submittingRef.current = true; setSubmitting(true); setMessage("");
     try {
-      const response = await fetch("/api/print-order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderId: order!.id, type }),
-      });
-      const payload = (await response.json()) as {
-        error?: string;
-        orderAccepted?: boolean;
-        outcome?: "failed" | "uncertain";
-      };
-
-      if (!response.ok && !payload.orderAccepted) {
-        reportOperationalError({
-          event: "order_submit_failed",
-          error: {
-            code: `HTTP_${response.status}`,
-            message: payload.error ?? "Invio comanda non riuscito",
-          },
-          orderId: order!.id,
-        });
-        setSaving("error");
-        setMutationError(
-          payload.error ??
-            (type === "order_update"
-              ? "Invio dell'aggiornamento non riuscito"
-              : "Invio della comanda non riuscito"),
-        );
-        return;
-      }
-
+      if (!await queue.flush()) return;
+      const current = queue.getSnapshot().base;
+      if (!current.order || !current.items.length) return;
+      const type = current.order.status === "draft" || current.update_print_status !== "pending" ? "new_order" : "order_update";
+      setMessage("Comanda salvata. Invio alla cassa e verifica della stampa…");
+      const response = await fetch("/api/print-order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId: current.order.id, type }) });
+      const payload = await response.json() as { error?: string; orderAccepted?: boolean; outcome?: string };
       await loadOrder();
-      if (!response.ok) {
-        const acceptedLabel =
-          type === "order_update"
-            ? "Aggiornamento registrato"
-            : "Comanda arrivata in cassa";
-        setMutationError(
-          payload.outcome === "uncertain"
-            ? `${acceptedLabel}. Esito stampa incerto: la cassa deve verificare la stampante.`
-            : `${acceptedLabel}, ma la stampa è fallita: ${payload.error ?? "interviene la cassa"}.`,
-        );
-      }
-    } catch (error) {
-      reportOperationalError({
-        event: "order_submit_failed",
-        error,
-        orderId: order!.id,
-      });
-      setSaving("error");
-      markUnreliable();
-      setMutationError(
-        "Connessione non affidabile. Non è possibile confermare l'invio: non chiudere o ricaricare.",
-      );
-    } finally {
-      submittingRef.current = false;
-      setSubmitting(false);
-      window.setTimeout(() => {
-        selfUpdate.current = false;
-      }, 500);
-    }
+      if (!response.ok) setMessage(payload.orderAccepted ? "Comanda ricevuta. La cassa deve verificare la stampa." : payload.error ?? "Invio non riuscito. Verifica la comanda prima di riprovare.");
+      else setMessage("Comanda ricevuta dalla cassa.");
+    } catch {
+      markUnreliable(); setMessage("Conferma di invio non ricevuta. Verifica la connessione e lo stato in cassa prima di riprovare.");
+    } finally { submittingRef.current = false; setSubmitting(false); }
   }
 }
 
-function getErrorMessage(error: unknown) {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
+function errorMessage(error: unknown) {
+  if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") {
+    if (error.message.includes("apply_order_edit")) return "L’aggiornamento del server ordini non è ancora disponibile. Le modifiche restano in attesa.";
     return error.message;
   }
-  return "Operazione non riuscita.";
-}
-
-function isConnectionFailure(error: unknown) {
-  if (error instanceof TypeError) return true;
-  if (typeof error !== "object" || error === null) return true;
-
-  const code = "code" in error ? String(error.code ?? "") : "";
-  const message = getErrorMessage(error).toLowerCase();
-  return (
-    !code &&
-    (message.includes("fetch") ||
-      message.includes("network") ||
-      message.includes("timeout") ||
-      message.includes("connection") ||
-      message.includes("raggiung"))
-  );
-}
-
-function getSubmissionLabel({
-  orderStatus,
-  updatePrintStatus,
-  canVerifySubmission,
-}: {
-  orderStatus: OrderStatus;
-  updatePrintStatus: PrintStatus | null;
-  canVerifySubmission: boolean;
-}) {
-  if (orderStatus === "draft") return "Invia alla cassa";
-  if (updatePrintStatus === "pending") return "Invia aggiornamento";
-  if (updatePrintStatus === "printing") return "Aggiornamento in stampa";
-  if (updatePrintStatus === "failed") return "Stampa da verificare in cassa";
-  if (canVerifySubmission) return "Verifica invio e stampa";
-  return "Comanda aggiornata";
-}
-
-function isWithinMinutes(value: string | null, minutes: number) {
-  if (!value) return false;
-  const timestamp = new Date(value).getTime();
-  return Number.isFinite(timestamp) && Date.now() - timestamp <= minutes * 60_000;
+  return "Connessione interrotta. Riprova: la stessa operazione non verrà duplicata.";
 }

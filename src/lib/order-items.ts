@@ -46,7 +46,7 @@ function normalizedExtras(extras: OrderItemExtra[]) {
 
 function itemSignature(item: OrderItem) {
   const extras = normalizedExtras(item.extras)
-    .map((extra) => `${extraIdentity(extra)}\u0000${extra.quantity}`)
+    .map((extra) => `${extraIdentity(extra)}\u0000${extra.quantity / item.quantity}`)
     .join("\u0001");
 
   return [
@@ -58,6 +58,19 @@ function itemSignature(item: OrderItem) {
     item.category_slug ?? "",
     extras,
   ].join("\u0002");
+}
+
+/** Return the raw rows represented by the same displayed variant. */
+export function getIdenticalOrderItemIds(
+  items: OrderItem[],
+  targetItemId: string,
+): string[] {
+  const target = items.find((item) => item.id === targetItemId);
+  if (!target) return [];
+  const signature = itemSignature(target);
+  return items
+    .filter((item) => itemSignature(item) === signature)
+    .map((item) => item.id);
 }
 
 export interface QuantityChangeOperation {
@@ -76,13 +89,10 @@ export function buildQuantityChangeOperations(
   if (!target) return [];
   if (delta > 0) return [{ itemId: target.id, delta }];
 
-  const signature = itemSignature(target);
-  const identicalItems = [
-    target,
-    ...items.filter(
-      (item) => item.id !== target.id && itemSignature(item) === signature,
-    ),
-  ];
+  const identicalIds = getIdenticalOrderItemIds(items, target.id);
+  const identicalItems = identicalIds
+    .map((itemId) => items.find((item) => item.id === itemId))
+    .filter((item): item is OrderItem => item !== undefined);
   let remaining = -delta;
   const operations: QuantityChangeOperation[] = [];
 
@@ -117,7 +127,10 @@ function normalizedPreparationExtras(extras: OrderItemExtra[]) {
 
 function preparationItemSignature(item: OrderItem) {
   const extras = normalizedPreparationExtras(item.extras)
-    .map((extra) => `${extra.extra_name_snapshot}\u0000${extra.quantity}`)
+    .map(
+      (extra) =>
+        `${extra.extra_name_snapshot}\u0000${extra.quantity / item.quantity}`,
+    )
     .join("\u0001");
 
   return [
@@ -171,13 +184,19 @@ export function applyPendingQuantityDeltas(
     .map((item) => {
       const delta = pendingDeltas[item.id] ?? 0;
       if (delta === 0) return item;
+      const nextQuantity = Math.max(0, item.quantity + delta);
       return {
         ...item,
-        quantity: Math.max(0, item.quantity + delta),
+        quantity: nextQuantity,
         line_total: Math.max(
           0,
           item.line_total + item.item_price_snapshot * delta,
         ),
+        extras: item.extras.map((extra) => ({
+          ...extra,
+          quantity: (extra.quantity / item.quantity) * nextQuantity,
+          total: (extra.total / item.quantity) * nextQuantity,
+        })),
       };
     })
     .filter((item) => item.quantity > 0);

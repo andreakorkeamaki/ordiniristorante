@@ -1,0 +1,51 @@
+/* Ordering-only rules. Public menu styles are deliberately unaffected. */
+.fast-order-layout .order-product-tile { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--line); border-radius: .75rem; overflow: hidden; background: #fffdf8; }
+.fast-order-layout .product-button { flex: 1; width: 100%; border: 0; border-radius: 0; min-height: 7rem; touch-action: manipulation; }
+.fast-order-layout .product-button:active:not(:disabled) { background: #f3e3ca; }
+.product-multiple { min-height: 2.75rem; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--red); font-weight: 700; touch-action: manipulation; }
+.order-catalogue-tools { background: var(--surface); }
+.fast-order-layout .stepper, .fast-order-layout .stepper.small { grid-template-columns: 2.75rem 2.75rem 2.75rem; }
+.fast-order-layout .stepper button, .fast-order-layout .stepper.small button { width: 2.75rem; height: 2.75rem; touch-action: manipulation; }
+.fast-order-layout .line-count-button { background: var(--paper); color: var(--red); font-weight: 800; text-decoration: underline dotted; text-underline-offset: .3rem; }
+.order-variant-extras { display: grid; gap: .2rem; margin-top: .5rem; color: var(--red); font-weight: 700; }
+.order-variant-extras small { color: var(--muted); font-weight: 400; font-size: .75rem; }
+.order-variant-note { margin: .4rem 0; font-weight: 700; }
+.order-line.has-variant { border-left: 3px solid var(--red); }
+.order-customization { margin-top: .65rem; }
+.order-customization summary { padding: .65rem 0; cursor: pointer; color: var(--muted); font-size: .85rem; }
+.order-customization .variant-help { font-size: .8rem; color: var(--muted); }
+.order-note-label { font-size: .8rem; }
+.fast-order-layout .extra-line button { width: 2.75rem; height: 2.75rem; }
+.fast-order-layout :is(input, textarea, select, button, summary):focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+.fast-order-layout .product-search input { min-width: 0; }
+.order-back-to-menu { display: none; }
+.order-summary-toggle { display: grid; gap: .15rem; border: 0; text-align: left; background: transparent; min-height: 3rem; color: var(--ink); }
+.order-summary-toggle small { color: var(--muted); }
+.order-save-error { border: 1px solid var(--red); background: #fff3e8; padding: 1rem; border-radius: .75rem; margin-bottom: 1rem; }
+.order-save-error .button { margin: .25rem .5rem .25rem 0; }
+.order-quantity-dialog { width: min(26rem, calc(100% - 2rem)); border: 1px solid var(--line); border-radius: 1rem; padding: 1.25rem; background: var(--surface); color: var(--ink); }
+.order-quantity-dialog::backdrop { background: rgb(0 0 0 / 40%); }
+.order-quantity-dialog h2 { font-size: 1.3rem; margin: 0 0 1rem; }
+.order-quantity-dialog label { display: grid; gap: .5rem; }
+.order-quantity-dialog input { width: 100%; border: 1px solid var(--line); border-radius: .5rem; padding: .75rem; font-size: 1.5rem; }
+.quantity-shortcuts { display: flex; gap: .5rem; margin: 1rem 0; }
+.quantity-shortcuts button { flex: 1; min-height: 2.75rem; border: 1px solid var(--line); border-radius: .5rem; color: var(--red); background: var(--paper); font-weight: 700; }
+@media (max-width: 900px) {
+  .fast-order-layout .order-panel { display: none; }
+  .fast-order-layout.summary-is-open .order-panel { display: block; }
+  .fast-order-layout.summary-is-open .product-picker { display: none; }
+  .fast-order-layout .order-lines { max-height: none; overflow: visible; }
+  .order-back-to-menu { display: inline-flex; }
+  .fast-order-bottom-bar { justify-content: space-between; }
+  .fast-order-layout .product-picker { overflow: visible; }
+  .order-catalogue-tools { position: sticky; top: 5rem; z-index: 12; padding-top: .1rem; border-radius: 1rem 1rem 0 0; }
+  .order-catalogue-tools .covers-row { padding-block: .5rem; }
+  .order-catalogue-tools .product-search { margin-block: .5rem; }
+}
+@media (max-width: 640px) {
+  .order-catalogue-tools { top: 7.3rem; }
+  .fast-order-layout :is(input, textarea, select) { font-size: 1rem; }
+  .fast-order-bottom-bar { gap: .5rem; }
+  .fast-order-bottom-bar .button { flex: 1; max-width: 15rem; padding-inline: .6rem; font-size: .85rem; }
+  .order-summary-toggle { max-width: 48%; }
+}

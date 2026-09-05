@@ -1,0 +1,163 @@
+/* Scoped additions for the staff dashboards. Imported after globals.css. */
+.operational-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: -0.6rem 0 1rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.quick-filter-group,
+.pickup-quick-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.quick-filter,
+.sort-control select {
+  min-height: 2.15rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: #fff;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.quick-filter:hover,
+.quick-filter.is-active {
+  border-color: var(--red);
+  color: var(--red);
+  background: #fff1ee;
+}
+
+.sort-control {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.sort-control select {
+  border-radius: 0.5rem;
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 0.35rem;
+  margin-top: 1rem;
+  padding: 2rem 1rem;
+  border: 1px dashed var(--line);
+  border-radius: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.empty-state strong {
+  color: var(--ink);
+}
+
+.empty-state p {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.pickup-quick-options {
+  margin-top: 0.25rem;
+}
+
+.pickup-quick-options > span {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 750;
+}
+
+.takeaway-urgency {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  min-height: 1.45rem;
+  padding: 0.18rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.takeaway-urgency.urgency-soon {
+  border-color: #d49c45;
+  color: #704516;
+  background: #fff3dd;
+}
+
+.takeaway-urgency.urgency-upcoming {
+  border-color: #9ab5d2;
+  color: #204f7b;
+  background: #edf5ff;
+}
+
+.takeaway-urgency.urgency-overdue {
+  border-color: #d9a8a2;
+  color: #7c241e;
+  background: #fff1ee;
+}
+
+.filter-scope {
+  margin: -0.55rem 0 1rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.cashier-filters .button {
+  min-height: 3rem;
+  white-space: nowrap;
+}
+
+.app-nav a.is-active {
+  color: #fff;
+  background: var(--red);
+}
+
+.app-nav a.is-active:hover {
+  background: var(--red);
+}
+
+@media (max-width: 42rem) {
+  .operational-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sort-control {
+    justify-content: space-between;
+  }
+
+  .sort-control select {
+    flex: 1;
+  }
+
+  .cashier-filters {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .cashier-filters .button,
+  .cashier-filters input,
+  .cashier-filters select {
+    width: 100%;
+  }
+}

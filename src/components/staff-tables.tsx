@@ -37,6 +37,8 @@ export function StaffTables({ profile }: { profile: Profile }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
   const [sortActiveTablesFirst, setSortActiveTablesFirst] = useState(true);
+  const [tableStatusFilter, setTableStatusFilter] = useState<"all" | "occupied" | "free">("all");
+  const [tableSort, setTableSort] = useState<"activity" | "number">("activity");
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [reprintTarget, setReprintTarget] = useState<Order | null>(null);
@@ -48,10 +50,19 @@ export function StaffTables({ profile }: { profile: Profile }) {
   const [loadError, setLoadError] = useState("");
   const loadGeneration = useRef(0);
   const hasSnapshot = useRef(false);
+  const staticData = useRef<{
+    tables: RestaurantTable[] | null;
+    profiles: Profile[] | null;
+  }>({ tables: null, profiles: null });
+  const tableSortInitialized = useRef(false);
+  const staticRevision = useRef(0);
+  const loadInFlight = useRef<Promise<void> | null>(null);
+  const loadRequestedWhileInFlight = useRef(false);
+  const loadRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const canWrite =
     connectionCanWrite && dataState === "ready" && serviceState === "ready";
 
-  const load = useCallback(async () => {
+  const performLoad = useCallback(async () => {
     if (serviceLoading) return;
     if (serviceState !== "ready") {
       setLoadError(
@@ -62,6 +73,7 @@ export function StaffTables({ profile }: { profile: Profile }) {
       return;
     }
     const generation = ++loadGeneration.current;
+    const referenceRevision = staticRevision.current;
     const supabase = createClient();
     const ordersQuery = supabase
       .from("orders")
@@ -69,9 +81,13 @@ export function StaffTables({ profile }: { profile: Profile }) {
       .eq("order_type", "dine_in")
       .in("status", [...ACTIVE_ORDER_STATUSES]);
     const [tablesResult, ordersResult, profilesResult, settingsResult] = await Promise.all([
-      supabase.from("restaurant_tables").select("*").eq("active", true).order("table_number"),
+      staticData.current.tables
+        ? Promise.resolve({ data: staticData.current.tables, error: null })
+        : supabase.from("restaurant_tables").select("*").eq("active", true).order("table_number"),
       ordersQuery,
-      supabase.from("profiles").select("id, full_name, role, active").eq("active", true),
+      staticData.current.profiles
+        ? Promise.resolve({ data: staticData.current.profiles, error: null })
+        : supabase.from("profiles").select("id, full_name, role, active").eq("active", true),
       supabase
         .from("restaurant_settings")
         .select("sort_active_tables_first")
@@ -92,7 +108,13 @@ export function StaffTables({ profile }: { profile: Profile }) {
     }
     if (generation !== loadGeneration.current) return;
 
-    setTables((tablesResult.data ?? []) as RestaurantTable[]);
+    const loadedTables = (tablesResult.data ?? []) as RestaurantTable[];
+    const loadedProfiles = (profilesResult.data ?? []) as Profile[];
+    if (referenceRevision === staticRevision.current) {
+      staticData.current.tables = loadedTables;
+      staticData.current.profiles = loadedProfiles;
+    }
+    setTables(loadedTables);
     setOrders(
       service
         ? ((ordersResult.data ?? []) as Order[]).filter(
@@ -102,18 +124,48 @@ export function StaffTables({ profile }: { profile: Profile }) {
     );
     setProfiles(
       new Map(
-        ((profilesResult.data ?? []) as Profile[]).map((profile) => [profile.id, profile]),
+        loadedProfiles.map((profile) => [profile.id, profile]),
       ),
     );
     setSortActiveTablesFirst(
       (settingsResult.data as { sort_active_tables_first: boolean })
         .sort_active_tables_first,
     );
+    if (!tableSortInitialized.current) {
+      tableSortInitialized.current = true;
+      setTableSort(
+        (settingsResult.data as { sort_active_tables_first: boolean })
+          .sort_active_tables_first
+          ? "activity"
+          : "number",
+      );
+    }
     hasSnapshot.current = true;
     setLoadError("");
     setDataState("ready");
     setLoading(false);
   }, [markUnreliable, service, serviceError, serviceLoading, serviceState]);
+  const load = useCallback(async () => {
+    if (loadInFlight.current) {
+      loadRequestedWhileInFlight.current = true;
+      await loadInFlight.current;
+      return;
+    }
+    const request = performLoad();
+    loadInFlight.current = request;
+    try {
+      await request;
+    } finally {
+      loadInFlight.current = null;
+      if (loadRequestedWhileInFlight.current) {
+        loadRequestedWhileInFlight.current = false;
+        void loadRef.current();
+      }
+    }
+  }, [performLoad]);
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
   const scheduleLoad = useCoalescedRefresh(load);
 
   useEffect(() => {
@@ -123,7 +175,16 @@ export function StaffTables({ profile }: { profile: Profile }) {
     const channel = supabase
       .channel("staff-tables")
       .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, scheduleLoad)
-      .on("postgres_changes", { event: "*", schema: "public", table: "restaurant_tables" }, scheduleLoad)
+      .on("postgres_changes", { event: "*", schema: "public", table: "restaurant_tables" }, () => {
+        staticRevision.current += 1;
+        staticData.current.tables = null;
+        scheduleLoad();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, () => {
+        staticRevision.current += 1;
+        staticData.current.profiles = null;
+        scheduleLoad();
+      })
       .on("postgres_changes", { event: "*", schema: "public", table: "restaurant_settings" }, scheduleLoad)
       .subscribe((channelStatus: string) => {
         if (isRealtimeFailureStatus(channelStatus)) {
@@ -133,7 +194,11 @@ export function StaffTables({ profile }: { profile: Profile }) {
           return;
         }
         if (isRealtimeSubscribedStatus(channelStatus)) {
-          if (subscribed) scheduleLoad();
+          if (subscribed) {
+            staticRevision.current += 1;
+            staticData.current = { tables: null, profiles: null };
+            scheduleLoad();
+          }
           subscribed = true;
         }
       });
@@ -150,18 +215,28 @@ export function StaffTables({ profile }: { profile: Profile }) {
     ),
     [orders],
   );
-  const visibleTables = useMemo(
-    () => sortTablesByActivity(
-      tables.filter((table) =>
-        `${table.table_number} ${table.display_name ?? ""}`
-          .toLowerCase()
-          .includes(query.toLowerCase()),
-      ),
-      new Set(orderByTable.keys()),
-      sortActiveTablesFirst,
-    ),
-    [orderByTable, query, sortActiveTablesFirst, tables],
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredTables = useMemo(
+    () => tables.filter((table) => {
+      const order = orderByTable.get(table.id);
+      const matchesQuery = `${table.table_number} ${table.display_name ?? ""}`
+        .toLowerCase()
+        .includes(normalizedQuery);
+      const matchesStatus =
+        tableStatusFilter === "all" ||
+        (tableStatusFilter === "occupied" ? Boolean(order) : !order);
+      return matchesQuery && matchesStatus;
+    }),
+    [normalizedQuery, orderByTable, tableStatusFilter, tables],
   );
+  const visibleTables = useMemo(() => {
+    if (tableSort === "number") {
+      return [...filteredTables].sort((left, right) => left.table_number - right.table_number);
+    }
+    return sortTablesByActivity(filteredTables, new Set(orderByTable.keys()), sortActiveTablesFirst);
+  }, [filteredTables, orderByTable, sortActiveTablesFirst, tableSort]);
+  const occupiedCount = tables.filter((table) => orderByTable.has(table.id)).length;
+  const hasTableFilters = Boolean(normalizedQuery) || tableStatusFilter !== "all";
   if ((loading || serviceLoading) && dataState === "loading") {
     return <div className="loader" aria-label="Caricamento tavoli" />;
   }
@@ -191,6 +266,32 @@ export function StaffTables({ profile }: { profile: Profile }) {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
+        </label>
+      </section>
+
+      <section className="operational-toolbar table-toolbar" aria-label="Filtri tavoli">
+        <div className="quick-filter-group" role="group" aria-label="Stato tavoli">
+          {([
+            ["all", `Tutti (${tables.length})`],
+            ["occupied", `Occupati (${occupiedCount})`],
+            ["free", `Liberi (${tables.length - occupiedCount})`],
+          ] as const).map(([value, label]) => (
+            <button
+              className={`quick-filter ${tableStatusFilter === value ? "is-active" : ""}`}
+              key={value}
+              onClick={() => setTableStatusFilter(value)}
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <label className="sort-control">
+          <span>Ordina</span>
+          <select value={tableSort} onChange={(event) => setTableSort(event.target.value as "activity" | "number")}>
+            <option value="activity">Attivi prima</option>
+            <option value="number">Numero tavolo</option>
+          </select>
         </label>
       </section>
 
@@ -241,6 +342,25 @@ export function StaffTables({ profile }: { profile: Profile }) {
           );
         })}
       </section>
+
+      {visibleTables.length === 0 && tables.length > 0 && (
+        <div className="empty-state">
+          <strong>Nessun tavolo corrisponde ai filtri</strong>
+          <p>Prova a cambiare stato o a cancellare la ricerca.</p>
+          {(hasTableFilters) && (
+            <button
+              className="button button-secondary"
+              onClick={() => {
+                setQuery("");
+                setTableStatusFilter("all");
+              }}
+              type="button"
+            >
+              Azzera filtri
+            </button>
+          )}
+        </div>
+      )}
 
       {reprintTarget && (
         <div

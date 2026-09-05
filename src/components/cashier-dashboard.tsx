@@ -134,20 +134,36 @@ export function CashierDashboard() {
   const [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const olderHistory = useRef<PrintJob[]>([]);
+  const historyPaged = useRef(false);
   const loadGeneration = useRef(0);
   const hasSnapshot = useRef(false);
   const cancelPrintJobInFlight = useRef(false);
+  const staticData = useRef<{
+    tables: RestaurantTable[] | null;
+    profiles: Profile[] | null;
+  }>({ tables: null, profiles: null });
+  const staticRevision = useRef(0);
+  const loadInFlight = useRef<Promise<void> | null>(null);
+  const loadRequestedWhileInFlight = useRef(false);
+  const loadRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const canWrite =
     connectionCanWrite && dataState === "ready" && serviceState === "ready";
 
-  const load = useCallback(async () => {
+  const performLoad = useCallback(async () => {
     const generation = ++loadGeneration.current;
+    const referenceRevision = staticRevision.current;
     const supabase = createClient();
     const [activeOrdersResult, closedOrdersResult, tablesResult, profilesResult, operationalJobsResult, historyJobsResult] = await Promise.all([
       supabase.from("orders").select("*").in("status", ACTIVE).order("created_at"),
       loadLatestClosedTableOrders(supabase, service?.id ?? null),
-      supabase.from("restaurant_tables").select("*"),
-      supabase.from("profiles").select("id, full_name, role, active"),
+      staticData.current.tables
+        ? Promise.resolve({ data: staticData.current.tables, error: null })
+        : supabase.from("restaurant_tables").select("*"),
+      staticData.current.profiles
+        ? Promise.resolve({ data: staticData.current.profiles, error: null })
+        : supabase.from("profiles").select("id, full_name, role, active"),
       loadAllOperationalPrintJobs(supabase),
       supabase
         .from("print_jobs")
@@ -172,10 +188,11 @@ export function CashierDashboard() {
       return;
     }
 
-    const rawJobs = [
-      ...((operationalJobsResult.data ?? []) as PrintJob[]),
+    const rawJobs = [...new Map([
+      ...olderHistory.current,
       ...((historyJobsResult.data ?? []) as PrintJob[]),
-    ];
+      ...((operationalJobsResult.data ?? []) as PrintJob[]),
+    ].map((job) => [job.id, job])).values()];
     const activeOrders = (activeOrdersResult.data ?? []) as Order[];
     const activeIds = new Set(activeOrders.map((order) => order.id));
     const missingIds = [...new Set(rawJobs.map((job) => job.order_id).filter((id) => !activeIds.has(id)))];
@@ -213,9 +230,14 @@ export function CashierDashboard() {
     }
     if (generation !== loadGeneration.current) return;
     const loadedTables = (tablesResult.data ?? []) as RestaurantTable[];
+    const loadedProfiles = (profilesResult.data ?? []) as Profile[];
+    if (referenceRevision === staticRevision.current) {
+      staticData.current.tables = loadedTables;
+      staticData.current.profiles = loadedProfiles;
+    }
     const tables = new Map(loadedTables.map((table) => [table.id, table]));
     const profiles = new Map(
-      ((profilesResult.data ?? []) as Profile[]).map((profile) => [profile.id, profile]),
+      loadedProfiles.map((profile) => [profile.id, profile]),
     );
     const lines = (linesResult.data ?? []) as OrderItem[];
 
@@ -230,14 +252,40 @@ export function CashierDashboard() {
     setRestaurantTables(loadedTables);
     setJobs(rawJobs);
     const historyPage = (historyJobsResult.data ?? []) as PrintJob[];
-    setHistoryCursor(historyPage.at(-1)?.created_at ?? null);
-    setHistoryHasMore(historyPage.length === HISTORY_PAGE_SIZE);
+    if (!historyPaged.current) {
+      setHistoryCursor(historyPage.at(-1)?.created_at ?? null);
+      setHistoryHasMore(historyPage.length === HISTORY_PAGE_SIZE);
+    }
     hasSnapshot.current = true;
     setLoadError("");
     setDataState("ready");
     setLoading(false);
   }, [markUnreliable, service?.id]);
+  const load = useCallback(async () => {
+    if (loadInFlight.current) {
+      loadRequestedWhileInFlight.current = true;
+      await loadInFlight.current;
+      return;
+    }
+    const request = performLoad();
+    loadInFlight.current = request;
+    try {
+      await request;
+    } finally {
+      loadInFlight.current = null;
+      if (loadRequestedWhileInFlight.current) {
+        loadRequestedWhileInFlight.current = false;
+        void loadRef.current();
+      }
+    }
+  }, [performLoad]);
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
   const scheduleLoad = useCoalescedRefresh(load);
+  const scheduleVisibleLoad = useCallback(() => {
+    if (document.visibilityState === "visible") scheduleLoad();
+  }, [scheduleLoad]);
 
   const refreshPrinter = useCallback(async () => {
     try {
@@ -262,17 +310,29 @@ export function CashierDashboard() {
 
   useEffect(() => {
     queueMicrotask(() => {
-      void load();
-      void refreshPrinter();
+      if (document.visibilityState === "visible") {
+        void load();
+        void refreshPrinter();
+      }
     });
 
     const supabase = createClient();
     let subscribed = false;
     const channel = supabase
       .channel("cashier-dashboard")
-      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, scheduleLoad)
-      .on("postgres_changes", { event: "*", schema: "public", table: "order_items" }, scheduleLoad)
-      .on("postgres_changes", { event: "*", schema: "public", table: "print_jobs" }, scheduleLoad)
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, scheduleVisibleLoad)
+      .on("postgres_changes", { event: "*", schema: "public", table: "order_items" }, scheduleVisibleLoad)
+      .on("postgres_changes", { event: "*", schema: "public", table: "print_jobs" }, scheduleVisibleLoad)
+      .on("postgres_changes", { event: "*", schema: "public", table: "restaurant_tables" }, () => {
+        staticRevision.current += 1;
+        staticData.current.tables = null;
+        scheduleVisibleLoad();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, () => {
+        staticRevision.current += 1;
+        staticData.current.profiles = null;
+        scheduleVisibleLoad();
+      })
       .subscribe((channelStatus: string) => {
         if (isRealtimeFailureStatus(channelStatus)) {
           markUnreliable();
@@ -281,20 +341,30 @@ export function CashierDashboard() {
           return;
         }
         if (isRealtimeSubscribedStatus(channelStatus)) {
-          if (subscribed) scheduleLoad();
+          if (subscribed) scheduleVisibleLoad();
           subscribed = true;
         }
       });
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void refreshPrinter();
+        scheduleLoad();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
     const interval = window.setInterval(() => {
-      void refreshPrinter();
-      scheduleLoad();
+      if (document.visibilityState === "visible") {
+        void refreshPrinter();
+        scheduleLoad();
+      }
     }, 15_000);
 
     return () => {
       window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       void supabase.removeChannel(channel);
     };
-  }, [load, markUnreliable, refreshPrinter, scheduleLoad]);
+  }, [load, markUnreliable, refreshPrinter, scheduleLoad, scheduleVisibleLoad]);
 
   const orderById = useMemo(
     () => new Map(orders.map((order) => [order.id, order])),
@@ -306,18 +376,18 @@ export function CashierDashboard() {
     [orders, restaurantTables, service?.id],
   );
   const filtered = useMemo(
-    () =>
-      activeOrders.filter((order) => {
-        const tableMatches =
-          !filter ||
-          String(order.table?.table_number ?? "").includes(filter) ||
-          String(order.order_number).includes(filter) ||
-          String(order.takeaway_name ?? "").toLowerCase().includes(filter.toLowerCase());
-        const waiterMatches = !waiterFilter || order.created_by === waiterFilter;
-        return tableMatches && waiterMatches;
-      }),
+    () => activeOrders.filter((order) => matchesCashierFilter(order, filter, waiterFilter)),
     [activeOrders, filter, waiterFilter],
   );
+  const visibleCashierTableRows = useMemo(
+    () => cashierTableRows.filter(({ activeOrder, closedOrder }) =>
+      [activeOrder, closedOrder].some(
+        (order) => order && matchesCashierFilter(order, filter, waiterFilter),
+      ),
+    ),
+    [cashierTableRows, filter, waiterFilter],
+  );
+  const hasCashierFilters = Boolean(filter.trim() || waiterFilter);
   const jobFor = useCallback(
     (orderId: string, type: PrintJobType) =>
       jobs.find((job) => job.order_id === orderId && job.job_type === type),
@@ -362,18 +432,41 @@ export function CashierDashboard() {
         </div>
         <div className="cashier-filters">
           <input
+            aria-label="Cerca nella coda ordini e nei tavoli"
             placeholder="Tavolo, asporto o comanda"
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
           />
-          <select value={waiterFilter} onChange={(event) => setWaiterFilter(event.target.value)}>
+          <select
+            aria-label="Filtra coda ordini e tavoli per cameriere"
+            value={waiterFilter}
+            onChange={(event) => setWaiterFilter(event.target.value)}
+          >
             <option value="">Tutti i camerieri</option>
             {waiters.map((waiter) => (
               <option key={waiter.id} value={waiter.id}>{waiter.full_name}</option>
             ))}
           </select>
+          {hasCashierFilters && (
+            <button
+              className="button button-secondary"
+              onClick={() => {
+                setFilter("");
+                setWaiterFilter("");
+              }}
+              type="button"
+            >
+              Azzera filtri
+            </button>
+          )}
         </div>
       </section>
+
+      <p className="filter-scope" role="status">
+        {hasCashierFilters
+          ? `${filtered.length} comande e ${visibleCashierTableRows.length} tavoli corrispondono ai filtri.`
+          : "I filtri si applicano a comande attive e tavoli."} La coda stampa resta sempre visibile per gestire errori e retry.
+      </p>
 
       <ServiceControl
         service={service}
@@ -543,7 +636,11 @@ export function CashierDashboard() {
       </section>
 
       {historicalJobs.length > 0 && (
-        <details className="historical-print-jobs">
+        <details
+          className="historical-print-jobs"
+          open={historyExpanded}
+          onToggle={(event) => setHistoryExpanded(event.currentTarget.open)}
+        >
           <summary>
             Storico stampe recente ({historicalJobs.length})
           </summary>
@@ -692,8 +789,8 @@ export function CashierDashboard() {
             />
           ))}
         </CashierColumn>
-        <CashierColumn title="Tavoli" count={cashierTableRows.length}>
-          {cashierTableRows.map(({ table, activeOrder, closedOrder }) => (
+        <CashierColumn title="Tavoli" count={visibleCashierTableRows.length}>
+          {visibleCashierTableRows.map(({ table, activeOrder, closedOrder }) => (
             <article
               className={`cashier-table-row ${activeOrder ? "is-active" : "is-closed"}`}
               key={table.id}
@@ -1075,6 +1172,8 @@ export function CashierDashboard() {
       return;
     }
     const page = (data ?? []) as PrintJob[];
+    historyPaged.current = true;
+    olderHistory.current = [...new Map([...olderHistory.current, ...page].map((job) => [job.id, job])).values()];
     const knownOrderIds = new Set(orders.map((order) => order.id));
     const missingOrderIds = [
       ...new Set(
@@ -1625,6 +1724,27 @@ function OrderCard({
 function printStatusLabel(job: PrintJob) {
   const label = JOB_LABELS[job.job_type];
   return `${label} — ${getPrintJobStatusLabel(job).toLowerCase()}`;
+}
+
+function matchesCashierFilter(
+  order: Order,
+  filter: string,
+  waiterId: string,
+) {
+  const normalizedFilter = filter.trim().toLowerCase();
+  const searchable = [
+    order.table?.table_number,
+    order.order_number,
+    order.takeaway_name,
+    getOrderLocationLabel(order),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return (
+    (!normalizedFilter || searchable.includes(normalizedFilter)) &&
+    (!waiterId || order.created_by === waiterId)
+  );
 }
 
 function formatOptionalDate(value: string | null) {
