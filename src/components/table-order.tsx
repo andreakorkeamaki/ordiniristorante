@@ -65,6 +65,7 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
   const [quantityDraft, setQuantityDraft] = useState("1");
   const [noteDrafts, setNoteDrafts] = useState<Record<string, NoteDraft>>({});
   const noteDraftsRef = useRef(noteDrafts);
+  const productPickerRef = useRef<HTMLElement>(null);
   const orderPanelRef = useRef<HTMLElement>(null);
   const pickerRef = useRef<HTMLDialogElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -311,7 +312,7 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
     {message && <p className="connection-action-hint" role="status">{message}</p>}
 
     <div className={`order-layout fast-order-layout ${summaryOpen ? "summary-is-open" : ""}`}>
-      <section className="product-picker">
+      <section className="product-picker" ref={productPickerRef}>
         <div className="order-catalogue-tools">
           <div className="covers-row covers-row-menu">
             {order.order_type === "dine_in" ? <>
@@ -339,7 +340,7 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
       </section>
 
       <section className="order-panel" ref={orderPanelRef} tabIndex={-1} id="table-order-summary" aria-label="Riepilogo comanda">
-        <div className="panel-title"><div><p className="eyebrow">Ordine</p><h2>Comanda</h2></div><strong>{productCount} prodotti</strong><button className="text-button order-back-to-menu" onClick={() => setSummaryOpen(false)}>← Menu</button></div>
+        <div className="panel-title"><div><p className="eyebrow">Ordine</p><h2>Comanda</h2></div><strong>{productCount} prodotti</strong><button className="text-button order-back-to-menu" onClick={() => switchOrderView(false)}>← Menu</button></div>
         <div className="order-lines">
           {!displayedItems.length && <p className="empty-line">Tocca un prodotto per iniziare.</p>}
           {displayedItems.map((item) => <article className={`order-line ${item.extras.length || item.notes ? "has-variant" : ""}`} key={item.id}>
@@ -368,10 +369,7 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
     </div>
 
     <div className="order-bottom-bar fast-order-bottom-bar">
-      <button className="order-summary-toggle" aria-expanded={summaryOpen} aria-controls="table-order-summary" onClick={() => {
-        setSummaryOpen((value) => !value);
-        if (window.matchMedia("(min-width: 901px)").matches) { orderPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); orderPanelRef.current?.focus({ preventScroll: true }); }
-      }}><span>{summaryOpen ? "← Menu" : `Vedi ordine · ${productCount} prodotti`}</span><strong>{formatCurrency(order.total)}</strong>{pendingCount > 0 && <small>Salvataggio…</small>}</button>
+      <button className="order-summary-toggle" aria-expanded={summaryOpen} aria-controls="table-order-summary" onClick={() => switchOrderView(!summaryOpen)}><span>{summaryOpen ? "← Menu" : `Vedi ordine · ${productCount} prodotti`}</span><strong>{formatCurrency(order.total)}</strong>{pendingCount > 0 && <small>Salvataggio…</small>}</button>
       <button className="button button-primary button-large" disabled={!canSubmit} onClick={() => void submitOrder()}>{submitting ? "Invio…" : order.status === "draft" ? "Invia alla cassa" : updatePrintStatus === "pending" ? "Invia aggiornamento" : order.status === "pending_cashier" ? "Verifica invio e stampa" : updatePrintStatus === "printing" ? "Aggiornamento in stampa" : updatePrintStatus === "failed" ? "Stampa da verificare in cassa" : "Comanda aggiornata"}</button>
     </div>
 
@@ -387,6 +385,15 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
   </>;
 
   function groupIds(item: OrderItem) { return getIdenticalOrderItemIds(queue.getSnapshot().visible.items, item.id); }
+  function switchOrderView(showSummary: boolean) {
+    const mobile = window.matchMedia("(max-width: 900px)").matches;
+    if (mobile) setSummaryOpen(showSummary);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const target = mobile && !showSummary ? productPickerRef.current : orderPanelRef.current;
+      target?.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (showSummary) orderPanelRef.current?.focus({ preventScroll: true });
+    }));
+  }
   function addProduct(product: MenuItem, quantity: number) {
     enqueue({ type: "add", item_id: crypto.randomUUID(), menu_item_id: product.id, quantity, product }, `Aggiungi ${quantity} ${product.name}`);
   }
@@ -437,3 +444,4 @@ function errorMessage(error: unknown) {
   }
   return "Connessione interrotta. Riprova: la stessa operazione non verrà duplicata.";
 }
+

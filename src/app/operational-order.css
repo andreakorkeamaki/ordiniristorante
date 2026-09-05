@@ -31,8 +31,11 @@
 .quantity-shortcuts { display: flex; gap: .5rem; margin: 1rem 0; }
 .quantity-shortcuts button { flex: 1; min-height: 2.75rem; border: 1px solid var(--line); border-radius: .5rem; color: var(--red); background: var(--paper); font-weight: 700; }
 @media (max-width: 900px) {
+  .fast-order-layout,
+  .fast-order-layout .product-picker,
+  .fast-order-layout .order-panel { min-width: 0; }
   .fast-order-layout .order-panel { display: none; }
-  .fast-order-layout.summary-is-open .order-panel { display: block; }
+  .fast-order-layout.summary-is-open .order-panel { display: block; scroll-margin-top: 8rem; }
   .fast-order-layout.summary-is-open .product-picker { display: none; }
   .fast-order-layout .order-lines { max-height: none; overflow: visible; }
   .order-back-to-menu { display: inline-flex; }
@@ -45,7 +48,22 @@
 @media (max-width: 640px) {
   .order-catalogue-tools { top: 7.3rem; }
   .fast-order-layout :is(input, textarea, select) { font-size: 1rem; }
-  .fast-order-bottom-bar { gap: .5rem; }
-  .fast-order-bottom-bar .button { flex: 1; max-width: 15rem; padding-inline: .6rem; font-size: .85rem; }
-  .order-summary-toggle { max-width: 48%; }
+  .fast-order-layout .panel-title { flex-wrap: wrap; }
+  .fast-order-layout .panel-title > div { min-width: 0; flex: 1 1 auto; }
+  .fast-order-layout .panel-title .order-back-to-menu { margin-left: auto; }
+  .fast-order-bottom-bar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: .5rem; }
+  .fast-order-bottom-bar .button { width: 100%; min-width: 0; max-width: none; padding-inline: .6rem; font-size: .85rem; line-height: 1.15; white-space: normal; }
+  .order-summary-toggle { width: 100%; min-width: 0; max-width: none; padding: .2rem; }
+  .order-summary-toggle span { line-height: 1.2; }
+  .fast-order-layout .line-actions { flex-wrap: wrap; }
 }
+@media (max-width: 380px) {
+  .fast-order-layout .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; padding: 0 .6rem .6rem; }
+  .fast-order-layout .product-button { min-height: 6.5rem; padding: .65rem; }
+  .fast-order-layout .product-button > span:not(.product-quantity-badge) { padding-right: 1.35rem; }
+  .fast-order-layout .product-quantity-badge { top: .35rem; right: .35rem; }
+  .fast-order-bottom-bar { grid-template-columns: 1fr; }
+  .order-summary-toggle { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .order-summary-toggle small { grid-column: 1 / -1; }
+}
+
