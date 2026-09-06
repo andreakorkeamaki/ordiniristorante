@@ -33,9 +33,21 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
   const [queue] = useState(() => new OrderEditQueue<OrderSnapshot, OrderEdit>(
     EMPTY_SNAPSHOT, projectOrderEdit,
     async (command, base) => {
-      const { data, error } = await createClient().rpc("apply_order_edit", {
-        p_order_id: base.order?.id, p_operation_id: command.id, p_edit: orderEditPayload(command.edit),
-      });
+      const supabase = createClient();
+      const result = !base.order && command.edit.type === "add" && tableId && !takeawayMode
+        ? await supabase.rpc("start_table_order_with_item", {
+            p_table_id: tableId,
+            p_operation_id: command.id,
+            p_item_id: command.edit.item_id,
+            p_menu_item_id: command.edit.menu_item_id,
+            p_quantity: command.edit.quantity,
+          })
+        : await supabase.rpc("apply_order_edit", {
+            p_order_id: base.order?.id,
+            p_operation_id: command.id,
+            p_edit: orderEditPayload(command.edit),
+          });
+      const { data, error } = result;
       if (error) throw error;
       if (!data?.order || !Array.isArray(data.items)) throw new Error("Conferma del salvataggio incompleta. Riprova la stessa operazione.");
       return data as OrderSnapshot;
@@ -59,6 +71,7 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
   const [presence, setPresence] = useState<string[]>([]);
   const [externalUpdate, setExternalUpdate] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const submittingRef = useRef(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [quantityPicker, setQuantityPicker] = useState<{ item?: OrderItem; product?: MenuItem; covers?: boolean } | null>(null);
@@ -76,11 +89,12 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
 
   const serviceOperational = Boolean(service && !isPreviousService(service));
   const operationsEnabled = connectionCanWrite && dataReady && catalogueReady && serviceState === "ready" && serviceOperational;
-  const writeEnabled = operationsEnabled && Boolean(order && canEditOrder(order.status)) && !submitting && !queueState.error;
+  const canStartTableOrder = !takeawayMode && !order && Boolean(tableId);
+  const writeEnabled = operationsEnabled && Boolean(canStartTableOrder || (order && canEditOrder(order.status))) && !submitting && !cancelling && !queueState.error;
   const pendingCount = queueState.pending.length;
   const saving = queueState.error ? "error" : pendingCount ? "saving" : "saved";
 
-  const loadOrder = useCallback(async (create = false, recover = false) => {
+  const loadOrder = useCallback(async (recover = false) => {
     if (queue.getSnapshot().pending.length && !recover) { refreshDeferred.current = true; return; }
     const generation = ++loadGeneration.current;
     const revision = queue.getRevision();
@@ -88,9 +102,7 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
       const supabase = createClient();
       const result = takeawayMode
         ? await supabase.from("orders").select("*").eq("id", requestedOrderId!).eq("order_type", "takeaway").in("status", [...ACTIVE_ORDER_STATUSES]).maybeSingle()
-        : create
-          ? await supabase.rpc("get_or_create_active_order", { p_table_id: tableId })
-          : await supabase.from("orders").select("*").eq("table_id", tableId!).in("status", ["draft", "pending_cashier", "confirmed", "in_preparation", "bill_requested"]).maybeSingle();
+        : await supabase.from("orders").select("*").eq("table_id", tableId!).in("status", ["draft", "pending_cashier", "confirmed", "in_preparation", "bill_requested"]).maybeSingle();
       if (result.error) throw result.error;
       const current = result.data as Order | null;
       let snapshot: OrderSnapshot = { ...EMPTY_SNAPSHOT, order: current };
@@ -140,7 +152,7 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
     initialLoad.current = true;
     queueMicrotask(async () => {
       const loaded = await loadCatalogue();
-      if (loaded) await loadOrder(Boolean(connectionCanWrite && service && !isPreviousService(service)));
+      if (loaded) await loadOrder();
       else setLoading(false);
     });
   }, [connectionCanWrite, loadCatalogue, loadOrder, service, serviceLoading, status]);
@@ -272,29 +284,37 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
   });
 
   if (loading || serviceLoading) return <div className="loader" aria-label="Caricamento comanda" />;
-  if (!order) return <section className="empty-card">
+  if (!order && takeawayMode) return <section className="empty-card">
     <h1>{loadError ? "Comanda non disponibile" : "Nessuna comanda aperta"}</h1>
-    <p>{catalogueError || loadError || serviceError || (!serviceOperational ? "La cassa deve aprire il servizio di oggi." : "Apri la comanda per iniziare.")}</p>
-    <button className="button button-primary" onClick={() => void loadCatalogue().then((loaded) => loaded && loadOrder(connectionCanWrite && serviceOperational))}>Riprova</button>
+    <p>{catalogueError || loadError || serviceError || "L’ordine da asporto non è più disponibile."}</p>
+    <button className="button button-primary" onClick={() => void loadCatalogue().then((loaded) => loaded && loadOrder())}>Riprova</button>
     <Link className="button" href={takeawayMode ? "/asporti" : "/staff/tables"}>Torna {takeawayMode ? "agli asporti" : "ai tavoli"}</Link>
   </section>;
 
-  const canVerifySubmission = order.status === "pending_cashier" && getInitialPrintDecision(profile, order) === "allowed";
-  const canSubmit = writeEnabled && productCount > 0 && (order.status === "draft" || updatePrintStatus === "pending" || canVerifySubmission);
+  const canVerifySubmission = Boolean(order && order.status === "pending_cashier" && getInitialPrintDecision(profile, order) === "allowed");
+  const canSubmit = Boolean(order && writeEnabled && productCount > 0 && (order.status === "draft" || updatePrintStatus === "pending" || canVerifySubmission));
   const block = !connectionCanWrite ? blockReason : serviceState !== "ready" ? serviceError : !serviceOperational ? "La cassa deve aprire il servizio di oggi." : catalogueError || loadError;
-  const label = getOrderShortLabel({ ...order, table: table ?? undefined });
+  const label = order
+    ? getOrderShortLabel({ ...order, table: table ?? undefined })
+    : table?.display_name?.trim() || `Tavolo ${table?.table_number ?? ""}`.trim();
+  const coverCount = order?.cover_count ?? 0;
+  const itemSubtotal = items.reduce((total, item) => total + item.line_total + item.extras.reduce((sum, extra) => sum + extra.total, 0), 0);
+  const displayedSubtotal = order?.subtotal ?? itemSubtotal;
+  const displayedCoverTotal = order?.cover_total ?? 0;
+  const displayedTotal = order?.total ?? itemSubtotal;
 
   return <>
     <section className="order-heading">
-      <div>
-        <Link className="back-link" href={takeawayMode ? "/asporti" : "/staff/tables"}>← {takeawayMode ? "Asporti" : "Tavoli"}</Link>
-        <p className="eyebrow">Comanda #{order.order_number}</p><h1>{label}</h1>
-        {takeawayMode && order.takeaway_pickup_at && <p className="takeaway-pickup">Ritiro alle {new Intl.DateTimeFormat("it-IT", { hour: "2-digit", minute: "2-digit" }).format(new Date(order.takeaway_pickup_at))}</p>}
+      <Link className="order-back-icon" href={takeawayMode ? "/asporti" : "/staff/tables"} aria-label={takeawayMode ? "Torna agli asporti" : "Torna ai tavoli"}>←</Link>
+      <div className="order-heading-info">
+        <p className="eyebrow">{order ? `Comanda #${order.order_number}` : "Nuova comanda"}</p><h1>{label}</h1>
+        {takeawayMode && order?.takeaway_pickup_at && <p className="takeaway-pickup">Ritiro alle {new Intl.DateTimeFormat("it-IT", { hour: "2-digit", minute: "2-digit" }).format(new Date(order.takeaway_pickup_at))}</p>}
         {service && <p className="service-context">{formatServiceLabel(service)}</p>}
-      </div>
-      <div className="order-live-status" aria-live="polite">
-        <span className={`save-state save-${saving}`}>{queueState.error ? "Da verificare" : pendingCount ? `Salvataggio… (${pendingCount})` : "Salvato"}</span>
-        <span className="status-label">{ORDER_STATUS_LABELS[order.status]}</span>
+        <div className="order-live-status" aria-live="polite">
+          {(order || pendingCount > 0) && <span className={`save-state save-${saving}`}>{queueState.error ? "Da verificare" : pendingCount ? `Salvataggio… (${pendingCount})` : "Salvato"}</span>}
+          <span className="status-label">{order ? ORDER_STATUS_LABELS[order.status] : pendingCount > 0 ? "Apertura tavolo" : "Tavolo libero"}</span>
+          {!takeawayMode && order?.status === "draft" && <button className="order-cancel-draft" type="button" disabled={cancelling || pendingCount > 0 || queueState.running || Boolean(queueState.error)} onClick={() => void discardDraftOrder()}>{cancelling ? "Annullamento…" : "Annulla tavolo"}</button>}
+        </div>
       </div>
     </section>
     {presence.length > 0 && <p className="presence">Anche {presence.join(", ")} sta consultando la comanda.</p>}
@@ -305,7 +325,7 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
       <p>{pendingCount} modifiche restano in attesa. I valori mostrati non sono ancora confermati.</p>
       <button className="button button-primary" onClick={() => void verify().then((online) => online && queue.retry())}>Riprova salvataggio</button>
       <button className="button" onClick={() => {
-        if (window.confirm("Rileggere la comanda dal server? Le modifiche ancora in attesa verranno abbandonate; quelle già registrate resteranno nell’ordine.")) void loadOrder(false, true);
+        if (window.confirm("Rileggere la comanda dal server? Le modifiche ancora in attesa verranno abbandonate; quelle già registrate resteranno nell’ordine.")) void loadOrder(true);
       }}>Rileggi e abbandona modifiche in attesa</button>
     </section>}
     {message && <p className="connection-action-hint" role="status">{message}</p>}
@@ -314,11 +334,11 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
       <section className="product-picker">
         <div className="order-catalogue-tools">
           <div className="covers-row covers-row-menu">
-            {order.order_type === "dine_in" ? <>
+            {!takeawayMode ? <>
               <span>Coperti</span><div className="stepper">
-                <button aria-label="Diminuisci coperti" disabled={!writeEnabled || order.cover_count <= 0} onClick={() => enqueue({ type: "details", cover_count: queue.getSnapshot().visible.order!.cover_count - 1 }, "Coperti")}>−</button>
-                <button className="covers-count-button" aria-label={`Scegli coperti, ${order.cover_count}`} disabled={!writeEnabled} onClick={() => openQuantity({ covers: true }, order.cover_count)}>{order.cover_count}</button>
-                <button aria-label="Aumenta coperti" disabled={!writeEnabled || order.cover_count >= 99} onClick={() => enqueue({ type: "details", cover_count: queue.getSnapshot().visible.order!.cover_count + 1 }, "Coperti")}>+</button>
+                <button aria-label="Diminuisci coperti" disabled={!writeEnabled || !order || coverCount <= 0} onClick={() => enqueue({ type: "details", cover_count: coverCount - 1 }, "Coperti")}>−</button>
+                <button className="covers-count-button" aria-label={`Scegli coperti, ${coverCount}`} disabled={!writeEnabled || !order} onClick={() => openQuantity({ covers: true }, coverCount)}>{coverCount}</button>
+                <button aria-label="Aumenta coperti" disabled={!writeEnabled || !order || coverCount >= 99} onClick={() => enqueue({ type: "details", cover_count: coverCount + 1 }, "Coperti")}>+</button>
               </div>
             </> : <strong>Prodotti da asporto</strong>}
           </div>
@@ -362,8 +382,8 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
             </details>
           </article>)}
         </div>
-        <label className="general-note">Nota generale<textarea value={noteDrafts.general?.value ?? order.general_notes} maxLength={500} disabled={!writeEnabled} placeholder="Es. portare tutto insieme…" onChange={(event) => changeNote("general", event.target.value, order.general_notes)} onBlur={() => commitNotes("general")} /></label>
-        <div className="totals"><p><span>Subtotale</span><strong>{formatCurrency(order.subtotal)}</strong></p>{order.order_type === "dine_in" && <p><span>Coperto ({order.cover_count} × {formatCurrency(order.cover_price_snapshot)})</span><strong>{formatCurrency(order.cover_total)}</strong></p>}<p className="grand-total"><span>Totale{pendingCount ? " provvisorio" : ""}</span><strong>{formatCurrency(order.total)}</strong></p></div>
+        <label className="general-note">Nota generale<textarea value={noteDrafts.general?.value ?? order?.general_notes ?? ""} maxLength={500} disabled={!writeEnabled || !order} placeholder={order ? "Es. portare tutto insieme…" : "Aggiungi prima un prodotto"} onChange={(event) => order && changeNote("general", event.target.value, order.general_notes)} onBlur={() => commitNotes("general")} /></label>
+        <div className="totals"><p><span>Subtotale</span><strong>{formatCurrency(displayedSubtotal)}</strong></p>{!takeawayMode && <p><span>Coperto ({coverCount}{order ? ` × ${formatCurrency(order.cover_price_snapshot)}` : ""})</span><strong>{formatCurrency(displayedCoverTotal)}</strong></p>}<p className="grand-total"><span>Totale{pendingCount ? " provvisorio" : ""}</span><strong>{formatCurrency(displayedTotal)}</strong></p></div>
       </section>
     </div>
 
@@ -371,8 +391,8 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
       <button className="order-summary-toggle" aria-expanded={summaryOpen} aria-controls="table-order-summary" onClick={() => {
         setSummaryOpen((value) => !value);
         if (window.matchMedia("(min-width: 901px)").matches) { orderPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); orderPanelRef.current?.focus({ preventScroll: true }); }
-      }}><span>{summaryOpen ? "← Menu" : `Vedi ordine · ${productCount} prodotti`}</span><strong>{formatCurrency(order.total)}</strong>{pendingCount > 0 && <small>Salvataggio…</small>}</button>
-      <button className="button button-primary button-large" disabled={!canSubmit} onClick={() => void submitOrder()}>{submitting ? "Invio…" : order.status === "draft" ? "Invia alla cassa" : updatePrintStatus === "pending" ? "Invia aggiornamento" : order.status === "pending_cashier" ? "Verifica invio e stampa" : updatePrintStatus === "printing" ? "Aggiornamento in stampa" : updatePrintStatus === "failed" ? "Stampa da verificare in cassa" : "Comanda aggiornata"}</button>
+      }}><span>{summaryOpen ? "← Menu" : `Vedi ordine · ${productCount} prodotti`}</span><strong>{formatCurrency(displayedTotal)}</strong>{pendingCount > 0 && <small>Salvataggio…</small>}</button>
+      <button className="button button-primary button-large" disabled={!canSubmit} onClick={() => void submitOrder()}>{submitting ? "Invio…" : !order ? "Aggiungi un prodotto" : order.status === "draft" ? "Invia alla cassa" : updatePrintStatus === "pending" ? "Invia aggiornamento" : order.status === "pending_cashier" ? "Verifica invio e stampa" : updatePrintStatus === "printing" ? "Aggiornamento in stampa" : updatePrintStatus === "failed" ? "Stampa da verificare in cassa" : "Comanda aggiornata"}</button>
     </div>
 
     <dialog className="order-quantity-dialog" ref={pickerRef} onCancel={() => closeQuantity()} onClose={() => { setQuantityPicker(null); returnFocusRef.current?.focus(); }}>
@@ -410,6 +430,25 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
     }
     closeQuantity();
   }
+  async function discardDraftOrder() {
+    const current = queue.getSnapshot();
+    const draft = current.base.order;
+    if (!draft || draft.status !== "draft" || current.pending.length || current.running || cancelling) return;
+    if (!window.confirm("Annullare questo tavolo? La comanda non è stata ancora inviata e verrà rimossa dai tavoli attivi.")) return;
+
+    setCancelling(true); setMessage("");
+    try {
+      const { error } = await createClient().rpc("discard_draft_order", { p_order_id: draft.id });
+      if (error) throw error;
+      queue.discardAndAccept(EMPTY_SNAPSHOT);
+      router.push("/staff/tables");
+    } catch (error) {
+      if (!(typeof error === "object" && error !== null && "code" in error && error.code)) markUnreliable();
+      setMessage(`Tavolo non annullato. ${errorMessage(error)}`);
+    } finally {
+      setCancelling(false);
+    }
+  }
   async function submitOrder() {
     if (submittingRef.current || !operationsEnabled || !commitNotes()) return;
     submittingRef.current = true; setSubmitting(true); setMessage("");
@@ -432,7 +471,8 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
 
 function errorMessage(error: unknown) {
   if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") {
-    if (error.message.includes("apply_order_edit")) return "L’aggiornamento del server ordini non è ancora disponibile. Le modifiche restano in attesa.";
+    if (error.message.includes("apply_order_edit") || error.message.includes("start_table_order_with_item")) return "L’aggiornamento del server ordini non è ancora disponibile. Le modifiche restano in attesa.";
+    if (error.message.includes("discard_draft_order")) return "L’annullamento del tavolo non è ancora disponibile sul server.";
     return error.message;
   }
   return "Connessione interrotta. Riprova: la stessa operazione non verrà duplicata.";

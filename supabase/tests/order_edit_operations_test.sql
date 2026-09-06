@@ -33,12 +33,29 @@ begin
   s:=public.apply_order_edit(o.id,'00000000-0000-4000-8000-00000000ee20',
     '{"type":"add","item_id":"00000000-0000-4000-8000-00000000ee10","menu_item_id":"00000000-0000-4000-8000-00000000ee05","quantity":5}');
   if (s->'order'->>'subtotal')::numeric<>50 then raise exception 'bulk add total'; end if;
+  if not exists (
+    select 1 from public.order_activity
+    where order_id=o.id and action='item_added'
+      and payload @> '{"item_id":"00000000-0000-4000-8000-00000000ee10","quantity":5}'::jsonb
+  ) then raise exception 'bulk add print activity'; end if;
+  s:=public.apply_order_edit(o.id,'00000000-0000-4000-8000-00000000ee20',
+    '{"type":"add","item_id":"00000000-0000-4000-8000-00000000ee10","menu_item_id":"00000000-0000-4000-8000-00000000ee05","quantity":5}');
+  if (
+    select count(*) from public.order_activity
+    where order_id=o.id and action='item_added'
+      and payload @> '{"item_id":"00000000-0000-4000-8000-00000000ee10","quantity":5}'::jsonb
+  )<>1 then raise exception 'bulk add retry duplicated print activity'; end if;
   s:=public.apply_order_edit(o.id,'00000000-0000-4000-8000-00000000ee21',extra_edit);
   if jsonb_array_length(s->'items')<>2 or (s->'order'->>'subtotal')::numeric<>52 then raise exception 'split extra'; end if;
   if (select quantity from public.order_items where id='00000000-0000-4000-8000-00000000ee10')<>4 then raise exception 'split preserves four plain'; end if;
   s:=public.apply_order_edit(o.id,'00000000-0000-4000-8000-00000000ee22',
     '{"type":"quantity","item_ids":["00000000-0000-4000-8000-00000000ee11"],"delta":4}');
   if (s->'order'->>'subtotal')::numeric<>100 then raise exception 'variant quantity scales extra'; end if;
+  if not exists (
+    select 1 from public.order_activity
+    where order_id=o.id and action='item_quantity_changed'
+      and payload @> '{"item_id":"00000000-0000-4000-8000-00000000ee11","delta":4}'::jsonb
+  ) then raise exception 'quantity increase print activity'; end if;
   if (select quantity from public.order_item_extras where order_item_id='00000000-0000-4000-8000-00000000ee11')<>5 then raise exception 'extra physical quantity'; end if;
   s:=public.apply_order_edit(o.id,'00000000-0000-4000-8000-00000000ee21',extra_edit);
   if (s->'order'->>'subtotal')::numeric<>100 or jsonb_array_length(s->'items')<>2 then raise exception 'retry fresh snapshot without duplicate'; end if;

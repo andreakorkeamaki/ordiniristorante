@@ -116,6 +116,29 @@ function snapshot(items: OrderItem[] = [item({ id: "pizza-1", quantity: 5, extra
 }
 
 describe("projectOrderEdit", () => {
+  it("mostra subito il primo prodotto senza creare una comanda vuota", () => {
+    const result = projectOrderEdit(
+      { order: null, items: [], update_print_status: null },
+      {
+        type: "add",
+        item_id: "first-item",
+        menu_item_id: product.id,
+        quantity: 2,
+        product,
+      },
+    );
+
+    expect(result.order).toBeNull();
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        id: "first-item",
+        order_id: "",
+        quantity: 2,
+        line_total: 20,
+      }),
+    ]);
+  });
+
   it("splits one of five pizzas when adding an extra and keeps extra quantities per pizza", () => {
     const result = projectOrderEdit(snapshot(), {
       type: "extra",

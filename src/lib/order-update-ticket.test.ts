@@ -45,6 +45,17 @@ describe("selectAddedOrderItems", () => {
     );
   });
 
+  it("stampa tutta la quantità di un'aggiunta multipla atomica", () => {
+    const result = selectAddedOrderItems(
+      [item("suppli", 5)],
+      [{ action: "item_added", payload: { item_id: "suppli", quantity: 5 } }],
+    );
+
+    expect(result[0]).toEqual(
+      expect.objectContaining({ id: "suppli", quantity: 5, line_total: 50 }),
+    );
+  });
+
   it("considera il saldo netto e non ristampa una quantità tolta", () => {
     const result = selectAddedOrderItems(
       [item("pinsa", 2), item("patate", 1)],

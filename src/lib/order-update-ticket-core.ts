@@ -28,7 +28,9 @@ export function selectAddedOrderItems(
     if (!itemId) continue;
 
     if (activity.action === "item_added") {
-      addedByItemId.set(itemId, (addedByItemId.get(itemId) ?? 0) + 1);
+      const quantity = Number(payload.quantity ?? 1);
+      if (!Number.isInteger(quantity) || quantity < 1) continue;
+      addedByItemId.set(itemId, (addedByItemId.get(itemId) ?? 0) + quantity);
       continue;
     }
 

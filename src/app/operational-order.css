@@ -4,6 +4,14 @@
 .fast-order-layout .product-button:active:not(:disabled) { background: #f3e3ca; }
 .product-multiple { min-height: 2.75rem; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--red); font-weight: 700; touch-action: manipulation; }
 .order-catalogue-tools { background: var(--surface); }
+.order-heading { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+.order-back-icon { display: inline-grid; width: 2.75rem; height: 2.75rem; place-items: center; border: 1px solid var(--line); border-radius: 999px; color: var(--red); background: var(--surface); font-size: 1.35rem; font-weight: 800; }
+.order-heading-info { display: grid; min-width: 0; justify-items: end; text-align: right; }
+.order-heading-info .eyebrow { margin-bottom: .2rem; }
+.order-heading-info h1 { max-width: 100%; font-size: clamp(1.8rem, 4vw, 2.7rem); line-height: 1; overflow-wrap: anywhere; }
+.order-heading-info .service-context, .order-heading-info .takeaway-pickup { margin-top: .25rem; }
+.order-heading-info .order-live-status { margin-top: .55rem; }
+.order-cancel-draft { min-height: 1.8rem; padding: .3rem .55rem; border: 1px solid #d9a8a2; border-radius: 999px; color: #7a1712; background: #fff2f0; font-size: .67rem; font-weight: 800; }
 .fast-order-layout .stepper, .fast-order-layout .stepper.small { grid-template-columns: 2.75rem 2.75rem 2.75rem; }
 .fast-order-layout .stepper button, .fast-order-layout .stepper.small button { width: 2.75rem; height: 2.75rem; touch-action: manipulation; }
 .fast-order-layout .line-count-button { background: var(--paper); color: var(--red); font-weight: 800; text-decoration: underline dotted; text-underline-offset: .3rem; }
@@ -17,7 +25,8 @@
 .order-note-label { font-size: .8rem; }
 .fast-order-layout .extra-line button { width: 2.75rem; height: 2.75rem; }
 .fast-order-layout :is(input, textarea, select, button, summary):focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
-.fast-order-layout .product-search input { min-width: 0; }
+.fast-order-layout .product-search { width: auto; max-width: none; min-width: 0; }
+.fast-order-layout .product-search input { flex: 1 1 0; width: auto; min-width: 0; }
 .order-back-to-menu { display: none; }
 .order-summary-toggle { display: grid; gap: .15rem; border: 0; text-align: left; background: transparent; min-height: 3rem; color: var(--ink); }
 .order-summary-toggle small { color: var(--muted); }
@@ -43,6 +52,10 @@
   .order-catalogue-tools .product-search { margin-block: .5rem; }
 }
 @media (max-width: 640px) {
+  .order-workspace { padding-top: .75rem; }
+  .order-heading { margin-bottom: .6rem; }
+  .order-heading-info h1 { font-size: 1.8rem; }
+  .order-heading-info .order-live-status { gap: .3rem; }
   .order-catalogue-tools { top: 7.3rem; }
   .fast-order-layout :is(input, textarea, select) { font-size: 1rem; }
   .fast-order-bottom-bar { gap: .5rem; }

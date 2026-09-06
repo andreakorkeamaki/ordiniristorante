@@ -48,19 +48,32 @@ function withQuantity(item: OrderItem, quantity: number): OrderItem {
   };
 }
 
+function projectedAddedItem(
+  edit: Extract<OrderEdit, { type: "add" }>,
+  orderId: string,
+): OrderItem {
+  return {
+    id: edit.item_id, order_id: orderId, menu_item_id: edit.menu_item_id,
+    item_name_snapshot: edit.product.name, item_price_snapshot: edit.product.price,
+    ingredients_snapshot: edit.product.ingredients, quantity: edit.quantity,
+    line_total: money(edit.product.price * edit.quantity), notes: "",
+    preparation_area_snapshot: edit.product.preparation_area, version: 1, extras: [],
+  };
+}
+
 /** Mirrors atomic server edits; authoritative prices and totals replace this projection on acknowledgement. */
 export function projectOrderEdit(snapshot: OrderSnapshot, edit: OrderEdit): OrderSnapshot {
-  if (!snapshot.order) return snapshot;
+  if (!snapshot.order) {
+    if (edit.type !== "add") return snapshot;
+    return {
+      ...snapshot,
+      items: [...snapshot.items, projectedAddedItem(edit, "")],
+    };
+  }
   let order = { ...snapshot.order };
   let items = snapshot.items.map((item) => ({ ...item, extras: item.extras.map((extra) => ({ ...extra })) }));
   if (edit.type === "add") {
-    items.push({
-      id: edit.item_id, order_id: order.id, menu_item_id: edit.menu_item_id,
-      item_name_snapshot: edit.product.name, item_price_snapshot: edit.product.price,
-      ingredients_snapshot: edit.product.ingredients, quantity: edit.quantity,
-      line_total: money(edit.product.price * edit.quantity), notes: "",
-      preparation_area_snapshot: edit.product.preparation_area, version: 1, extras: [],
-    });
+    items.push(projectedAddedItem(edit, order.id));
   } else if (edit.type === "quantity") {
     let remaining = edit.delta;
     items = items.flatMap((item) => {
