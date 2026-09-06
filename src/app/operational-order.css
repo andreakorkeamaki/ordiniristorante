@@ -4,6 +4,7 @@
 .fast-order-layout .product-button:active:not(:disabled) { background: #f3e3ca; }
 .product-multiple { min-height: 2.75rem; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--red); font-weight: 700; touch-action: manipulation; }
 .order-catalogue-tools { background: var(--surface); }
+.fast-order-layout, .fast-order-layout .product-picker, .order-catalogue-tools { width: 100%; max-width: 100%; min-width: 0; }
 .order-heading { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; }
 .order-back-icon { display: inline-grid; width: 2.75rem; height: 2.75rem; place-items: center; border: 1px solid var(--line); border-radius: 999px; color: var(--red); background: var(--surface); font-size: 1.35rem; font-weight: 800; }
 .order-heading-info { display: grid; min-width: 0; justify-items: end; text-align: right; }
@@ -47,6 +48,7 @@
   .order-back-to-menu { display: inline-flex; }
   .fast-order-bottom-bar { justify-content: space-between; }
   .fast-order-layout .product-picker { overflow: visible; }
+  .fast-order-layout .category-tabs { width: 100%; max-width: 100%; min-width: 0; }
   .order-catalogue-tools { position: sticky; top: 5rem; z-index: 12; padding-top: .1rem; border-radius: 1rem 1rem 0 0; }
   .order-catalogue-tools .covers-row { padding-block: .5rem; }
   .order-catalogue-tools .product-search { margin-block: .5rem; }
