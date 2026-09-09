@@ -18,6 +18,21 @@ Web app mobile-first per menu QR, comande staff, cassa e amministrazione. Next.j
 
 Supabase è l’unica fonte di verità. Il browser non salva menu o comande in `localStorage`.
 
+## Quantità disponibili
+
+In `/admin`, la spunta **Prodotto numerato** attiva il campo obbligatorio
+**Pezzi disponibili**. Senza spunta non ci sono limiti; `0` significa esaurito.
+Inserire i pezzi ancora disponibili,
+escludendo quelli già presenti nelle comande. Il contatore scala già nelle bozze
+e negli asporti, recupera i pezzi rimossi o annullati e non si azzera a fine servizio.
+Le varianti e i tentativi ripetuti della stessa operazione non scalano due volte.
+I prodotti esauriti sono bloccati per lo staff e nascosti nel menu pubblico.
+
+Applicare la migrazione `20260909110102_menu_item_stock.sql` prima di pubblicare
+questa versione dell’app. I prodotti esistenti partono senza limite. Il test SQL
+`supabase/tests/menu_item_stock_test.sql` copre prenotazioni, esaurimento, rollback,
+varianti, annullamento e quantità illimitate.
+
 ## Requisiti
 
 - Node.js 20.9 o successivo

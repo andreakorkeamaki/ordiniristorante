@@ -67,7 +67,7 @@ export function PublicMenu() {
     setData({
       settings: (settings.data as RestaurantSettings | null) ?? { ...DEFAULT_SETTINGS },
       categories: (categories.data ?? []) as MenuCategory[],
-      items: (items.data ?? []) as MenuItem[],
+      items: ((items.data ?? []) as MenuItem[]).filter((item) => item.stock_quantity !== 0),
       extras: (extras.data ?? []) as MenuExtra[],
     });
     setError(false);

@@ -52,6 +52,8 @@ export interface MenuCategory {
 }
 
 export interface MenuItem {
+  /** Remaining portions; null/absent means unlimited. */
+  stock_quantity?: number | null;
   id: string;
   category_id: string;
   name: string;

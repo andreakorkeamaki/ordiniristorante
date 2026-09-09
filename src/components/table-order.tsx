@@ -347,12 +347,12 @@ export function TableOrder({ tableId, orderId: requestedOrderId, profile }: {
         </div>
         <div className="product-grid">
           {visibleProducts.map((product) => <div className="order-product-tile" key={product.id}>
-            <button className="product-button" disabled={!writeEnabled || !product.available} onClick={() => addProduct(product, 1)} aria-label={`Aggiungi ${product.name}`}>
+            <button className="product-button" disabled={!writeEnabled || !product.available || product.stock_quantity === 0} onClick={() => addProduct(product, 1)} aria-label={`Aggiungi ${product.name}`}>
               {(menuItemQuantities[product.id] ?? 0) > 0 && <span className="product-quantity-badge" aria-label={`${menuItemQuantities[product.id]} inseriti`}>{menuItemQuantities[product.id]}</span>}
-              <span>{product.name}</span><strong>{product.available ? formatCurrency(product.price) : "Esaurito"}</strong>
+              <span>{product.name}{product.stock_quantity != null && <small> · {product.stock_quantity} disponibili</small>}</span><strong>{product.available && product.stock_quantity !== 0 ? formatCurrency(product.price) : "Esaurito"}</strong>
               {product.ingredients && <small>{product.ingredients}</small>}
             </button>
-            <button className="product-multiple" disabled={!writeEnabled || !product.available} aria-label={`Scegli quantità di ${product.name}`} onClick={() => openQuantity({ product }, 1)}>Quantità…</button>
+            <button className="product-multiple" disabled={!writeEnabled || !product.available || product.stock_quantity === 0} aria-label={`Scegli quantità di ${product.name}`} onClick={() => openQuantity({ product }, 1)}>Quantità…</button>
           </div>)}
         </div>
         {!visibleProducts.length && <div className="empty-line"><p>{search ? "Nessun prodotto trovato." : "Nessun prodotto in questa categoria."}</p>{search && <button className="button" onClick={() => setSearch("")}>Cancella ricerca</button>}</div>}

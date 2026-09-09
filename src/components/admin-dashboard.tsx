@@ -44,6 +44,7 @@ export function AdminDashboard() {
     useState<OrderTicketPrintMode>("department_split");
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [saving, setSaving] = useState(false);
+  const [newProductVersion, setNewProductVersion] = useState(0);
   const [testPrinting, setTestPrinting] = useState(false);
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -248,6 +249,7 @@ export function AdminDashboard() {
               </select>
               <input name="name" placeholder="Nome prodotto" maxLength={120} required />
               <input name="price" type="number" min="0" step="0.01" placeholder="Prezzo" required />
+              <ProductStockField key={newProductVersion} />
               <select name="preparation_area" defaultValue="cucina">
                 <option value="pizzeria">Pizzeria</option><option value="cucina">Cucina</option>
                 <option value="bar">Bar</option><option value="cassa">Cassa</option>
@@ -298,6 +300,7 @@ export function AdminDashboard() {
                       </button>
                       <input name="name" defaultValue={item.name} maxLength={120} aria-label="Nome" />
                       <input name="price" type="number" min="0" step="0.01" defaultValue={item.price} aria-label="Prezzo" />
+                      <ProductStockField key={item.stock_quantity ?? "unlimited"} quantity={item.stock_quantity} />
                       <input name="ingredients" defaultValue={item.ingredients ?? ""} maxLength={500} placeholder="Ingredienti" aria-label="Ingredienti" />
                       <select name="preparation_area" defaultValue={item.preparation_area} aria-label="Reparto">
                         <option value="pizzeria">Pizzeria</option><option value="cucina">Cucina</option>
@@ -543,7 +546,10 @@ export function AdminDashboard() {
       slug,
       sort_order: categories.length,
     }));
-    if (saved) form.reset();
+    if (saved) {
+      form.reset();
+      setNewProductVersion((version) => version + 1);
+    }
   }
 
   async function saveCategory(
@@ -592,34 +598,46 @@ export function AdminDashboard() {
     const form = event.currentTarget;
     const data = new FormData(form);
     const categoryId = String(data.get("category_id"));
-    await execute(() => createClient().from("menu_items").insert({
+    const saved = await execute(() => createClient().from("menu_items").insert({
       category_id: categoryId,
+      stock_quantity: data.get("stock_enabled") === "on" ? Number(data.get("stock_quantity")) : null,
       name: String(data.get("name")),
       price: Number(data.get("price")),
       preparation_area: String(data.get("preparation_area")) as PreparationArea,
       sort_order: items.filter((item) => item.category_id === categoryId).length,
     }));
-    form.reset();
+    if (saved) form.reset();
   }
 
   async function saveProduct(event: React.FormEvent<HTMLFormElement>, id: string) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
+    const stockInput = event.currentTarget.elements.namedItem("stock_quantity") as HTMLInputElement;
+    const previousStock = stockInput.defaultValue === "" ? null : Number(stockInput.defaultValue);
+    const stock = data.get("stock_enabled") === "on" ? Number(stockInput.value) : null;
+    const stockChanged = stock !== previousStock;
     const current = items.find((item) => item.id === id);
     const name = String(data.get("name"));
     const ingredients = String(data.get("ingredients")) || null;
-    await execute(() => createClient().from("menu_items").update({
-      name,
-      name_en: current && name === current.name ? current.name_en : null,
-      price: Number(data.get("price")),
-      ingredients,
-      ingredients_en:
-        current && ingredients === current.ingredients ? current.ingredients_en : null,
-      preparation_area: String(data.get("preparation_area")) as PreparationArea,
-      available: data.get("available") === "on",
-      visible_public: data.get("visible_public") === "on",
-      visible_staff: data.get("visible_staff") === "on",
-    }).eq("id", id));
+    await execute(async () => {
+      let query = createClient().from("menu_items").update({
+        ...(stockChanged ? { stock_quantity: stock } : {}),
+        name,
+        name_en: current && name === current.name ? current.name_en : null,
+        price: Number(data.get("price")),
+        ingredients,
+        ingredients_en:
+          current && ingredients === current.ingredients ? current.ingredients_en : null,
+        preparation_area: String(data.get("preparation_area")) as PreparationArea,
+        available: data.get("available") === "on",
+        visible_public: data.get("visible_public") === "on",
+        visible_staff: data.get("visible_staff") === "on",
+      }).eq("id", id);
+      if (stockChanged) query = previousStock === null ? query.is("stock_quantity", null) : query.eq("stock_quantity", previousStock);
+      const result = await query.select("id").single();
+      return result.error?.code === "PGRST116"
+        ? { error: { code: "PGRST116", message: "La disponibilità è cambiata. Ricarica i prodotti e riprova." } } : result;
+    });
   }
 
   async function createExtra(event: React.FormEvent<HTMLFormElement>) {
@@ -914,5 +932,37 @@ function replaceCategoryItems(
     item.category_id === categoryId
       ? reordered[categoryIndex++]
       : item,
+  );
+}
+
+function ProductStockField({ quantity }: { quantity?: number | null }) {
+  const [enabled, setEnabled] = useState(quantity != null);
+
+  return (
+    <div className="product-stock-field">
+      <label className="check-label">
+        <input
+          name="stock_enabled"
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => setEnabled(event.target.checked)}
+        />
+        Prodotto numerato
+      </label>
+      <label hidden={!enabled}>
+        Pezzi disponibili
+        <input
+          name="stock_quantity"
+          type="number"
+          min="0"
+          max="2147483647"
+          step="1"
+          defaultValue={quantity ?? ""}
+          disabled={!enabled}
+          required={enabled}
+        />
+      </label>
+      <small>{enabled ? "Scala quando aggiungi il prodotto alla comanda." : "Senza limite di quantità."}</small>
+    </div>
   );
 }
